@@ -12,8 +12,6 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -27,12 +25,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y gtkwave
       - run: vcd2fst tests/fixtures/wave.vcd /tmp/wave.fst
-      - run: python scripts/wave_debug.py inspect --workspace tests/fixtures --waveform /tmp/wave.fst --out-dir /tmp/direct --json
-      - run: SV_WAVE_DEBUG_DISABLE_PYWELLEN=1 python scripts/wave_debug.py inspect --workspace tests/fixtures --waveform /tmp/wave.fst --out-dir /tmp/fallback --json
+      - run: python scripts/wave_debug.py inspect --workspace tests/fixtures --waveform /tmp/wave.fst --out-dir /tmp/direct --json > /tmp/direct.json
+      - run: python -c "import json; assert json.load(open('/tmp/direct.json'))['waveform']['backend'] == 'pywellen'"
+      - run: SV_WAVE_DEBUG_DISABLE_PYWELLEN=1 python scripts/wave_debug.py inspect --workspace tests/fixtures --waveform /tmp/wave.fst --out-dir /tmp/fallback --json > /tmp/fallback.json
+      - run: python -c "import json; assert json.load(open('/tmp/fallback.json'))['waveform']['backend'] == 'fst2vcd+python-vcd'"

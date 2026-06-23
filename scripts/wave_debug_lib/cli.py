@@ -84,7 +84,6 @@ def _authority_db(args: argparse.Namespace, workspace: Path, output: Path, top: 
 def _doctor(as_json: bool) -> int:
     root = skill_root()
     pywellen, pywellen_error = pywellen_available(root)
-    engine = (root / "vendor/hardware-debug-skill/scripts/hw_debug_cli.py").is_file()
     result = {
         "schema_version": SCHEMA_VERSION,
         "python": {"version": sys.version.split()[0], "supported_vcd": sys.version_info >= (3, 10)},
@@ -92,13 +91,11 @@ def _doctor(as_json: bool) -> int:
             "vcd": {"available": True, "backend": "python-vcd"},
             "fst_direct": {"available": pywellen, "backend": "pywellen", "error": pywellen_error},
             "fst_conversion": {"available": shutil.which("fst2vcd") is not None, "path": shutil.which("fst2vcd")},
-            "rtl_authority": {"available": engine},
+            "rtl_authority": {"available": True, "backend": "internal-rtl-parser"},
         },
         "ready": sys.version_info >= (3, 10),
         "remediation": [],
     }
-    if not engine:
-        result["remediation"].append("git submodule update --init --recursive .codex/skills/systemverilog-waveform-debug-skill")
     if not pywellen and shutil.which("fst2vcd") is None:
         result["remediation"].append("install a compatible pywellen or fst2vcd to read FST waveforms")
     if as_json:
@@ -279,10 +276,8 @@ def _authority(args: argparse.Namespace) -> int:
         raise ValueError("authority requires Verilog/SystemVerilog source")
     top, _ = _top(args, manifest, wave, waveform, True)
     assert top is not None
-    source_root = args.source_root or workspace
-    source_root = source_root if source_root.is_absolute() else workspace / source_root
     destination = output / "authority" / top
-    build_authority(skill_root(), source_root.resolve(), manifest.files, top, destination, args.force)
+    build_authority(manifest.files, top, destination, args.force)
     print(destination)
     return 0
 

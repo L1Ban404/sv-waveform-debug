@@ -1,73 +1,13 @@
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 import re
 import sqlite3
-import subprocess
-import sys
+from .rtl_authority import build_rtl_authority
 
 
-def engine_root(skill_root: Path) -> Path:
-    path = skill_root / "vendor/hardware-debug-skill"
-    if not (path / "scripts/hw_debug_cli.py").is_file():
-        raise RuntimeError(
-            "waveform engine is missing; run `git submodule update --init --recursive "
-            ".codex/skills/systemverilog-waveform-debug-skill`"
-        )
-    return path
-
-
-def normalized_sources(source_root: Path, files: list[Path], output: Path) -> Path:
-    normalized = output / "normalized-rtl"
-    for source in files:
-        try:
-            relative = source.relative_to(source_root)
-        except ValueError:
-            relative = Path("external") / source.name
-        target = normalized / relative
-        text = source.read_text(encoding="utf-8", errors="ignore")
-        text = re.sub(r"(\bmodule\s+[A-Za-z_][A-Za-z0-9_$]*)\s*;", r"\1();", text)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.is_file() or target.read_text(encoding="utf-8") != text:
-            target.write_text(text, encoding="utf-8")
-    return normalized
-
-
-def _restore_paths(authority_dir: Path, normalized: Path, sources: Path) -> None:
-    old, new = str(normalized.resolve()), str(sources.resolve())
-    for name in ("rtl_authority_table.json", "rtl_authority_index.json"):
-        path = authority_dir / name
-        if path.is_file():
-            path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
-    database = authority_dir / "rtl_authority.sqlite3"
-    if database.is_file():
-        with sqlite3.connect(database) as connection:
-            connection.execute("update authority_lookup set source_file = replace(source_file, ?, ?)", (old, new))
-
-
-def build_authority(skill_root: Path, source_root: Path, files: list[Path], top: str, output: Path, force: bool) -> None:
-    engine = engine_root(skill_root)
-    normalized = normalized_sources(source_root, files, output.parent)
-    command = [
-        sys.executable,
-        str(engine / "scripts/hw_debug_cli.py"),
-        "build-authority",
-        "--rtl-root",
-        str(normalized),
-        "--top",
-        top,
-        "--out-dir",
-        str(output),
-    ]
-    if force:
-        command.append("--force")
-    env = os.environ.copy()
-    vendored = engine / "wellen/pywellen"
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(vendored), env.get("PYTHONPATH"))))
-    subprocess.run(command, check=True, env=env)
-    _restore_paths(output, normalized, source_root)
+def build_authority(files: list[Path], top: str, output: Path, force: bool) -> None:
+    build_rtl_authority(files, top, output, force)
 
 
 def _source_context(source_file: str | None, local_name: str | None, limit: int = 6) -> list[dict[str, object]]:

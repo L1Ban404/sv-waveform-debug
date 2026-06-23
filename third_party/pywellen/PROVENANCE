@@ -1,0 +1,5 @@
+Component: pywellen / wellen Python extension
+Upstream: https://github.com/ekiwi/wellen
+License: BSD-3-Clause (see LICENSE)
+Binary: CPython 3.12, x86-64 Linux
+Imported as a standalone, license-preserving third-party runtime component.

@@ -24,7 +24,6 @@ The adapter is simulator- and architecture-independent.
 ```bash
 git submodule add https://github.com/L1Ban404/systemverilog-waveform-debug-skill.git \
   .codex/skills/systemverilog-waveform-debug-skill
-git submodule update --init --recursive
 ```
 
 SSH works as well:
@@ -32,7 +31,6 @@ SSH works as well:
 ```bash
 git submodule add git@github.com:L1Ban404/systemverilog-waveform-debug-skill.git \
   .codex/skills/systemverilog-waveform-debug-skill
-git submodule update --init --recursive
 ```
 
 ## Quick start
@@ -69,11 +67,13 @@ Run `python "$CLI" <command> --help` for all options. Times accept integer wavef
 
 VCD requires only Python 3.10 or newer. FST uses the first available path:
 
-1. a compatible installed `pywellen`;
-2. the pinned engine's compatible bundled binary;
+1. the bundled BSD-3-Clause `pywellen` binary on compatible CPython 3.12 x86-64 Linux systems;
+2. a compatible installed `pywellen` on other platforms;
 3. `fst2vcd`, commonly provided by GTKWave or OSS CAD Suite.
 
-`doctor --json` reports exact capabilities and remediation. The pinned [`trace1729/hardware-debug-skill`](https://github.com/trace1729/hardware-debug-skill) submodule remains the RTL-authority engine.
+`doctor --json` reports exact capabilities and remediation. RTL hierarchy authority is built by this repository's internal parser, so installation does not require nested Git submodules.
+
+The bundled `pywellen` component is distributed under BSD-3-Clause; see `third_party/pywellen/LICENSE`.
 
 ## Development
 

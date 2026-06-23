@@ -42,11 +42,16 @@ class WaveBackend:
 def _load_pywellen(skill_root: Path):
     if os.environ.get("SV_WAVE_DEBUG_DISABLE_PYWELLEN", "").lower() in {"1", "true", "yes", "on"}:
         return None
+    vendored = skill_root / "third_party/pywellen"
+    sys.path.insert(0, str(vendored))
     try:
         return importlib.import_module("pywellen")
     except (ImportError, OSError):
-        vendored = skill_root / "vendor/hardware-debug-skill/wellen/pywellen"
-        sys.path.insert(0, str(vendored))
+        sys.modules.pop("pywellen", None)
+        try:
+            sys.path.remove(str(vendored))
+        except ValueError:
+            pass
         try:
             return importlib.import_module("pywellen")
         except (ImportError, OSError):
@@ -61,12 +66,15 @@ def pywellen_available(skill_root: Path) -> tuple[bool, str | None]:
     return (module is not None, None if module is not None else "module not importable")
 
 
-def _pywellen_can_open(path: Path, skill_root: Path) -> bool:
+def _pywellen_can_open(path: Path, module: object) -> bool:
     if os.environ.get("SV_WAVE_DEBUG_DISABLE_PYWELLEN", "").lower() in {"1", "true", "yes", "on"}:
         return False
-    vendored = skill_root / "vendor/hardware-debug-skill/wellen/pywellen"
+    module_file = getattr(module, "__file__", None)
+    if not module_file:
+        return False
+    module_root = Path(str(module_file)).resolve().parent.parent
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(vendored), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(module_root), env.get("PYTHONPATH"))))
     probe = subprocess.run(
         [sys.executable, "-c", "import pywellen,sys; pywellen.Waveform(path=sys.argv[1])", str(path)],
         env=env,
@@ -176,7 +184,7 @@ def open_waveform(path: Path, skill_root: Path, output_root: Path) -> WaveBacken
     if suffix != ".fst":
         raise ValueError(f"unsupported waveform format: {path}")
     pywellen = _load_pywellen(skill_root)
-    if pywellen is not None and _pywellen_can_open(path, skill_root):
+    if pywellen is not None and _pywellen_can_open(path, pywellen):
         try:
             waveform = pywellen.Waveform(path=str(path))
             return WaveBackend(path, "fst", "pywellen", _header_from_wellen(waveform), waveform, path)

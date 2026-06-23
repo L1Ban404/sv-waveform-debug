@@ -78,4 +78,4 @@ Prefer fewer than 64 signals and 200 changes per probe. If output is truncated, 
 
 Use VCD directly on Python 3.10+. For FST, the tool tries compatible `pywellen`, then cached `fst2vcd` conversion. Run `doctor` for actionable dependency failures.
 
-Keep generic adapter behavior in this repository. Do not modify `vendor/hardware-debug-skill`.
+Keep generic waveform and RTL-authority behavior in this repository. Do not introduce project-specific hierarchy assumptions into the parser.
