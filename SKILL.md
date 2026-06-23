@@ -1,186 +1,81 @@
 ---
-name: hardware-debug-waveform
-description: Use when debugging or explaining hardware behavior from a waveform together with a XiangShan-style Scala/Chisel source tree and optional emitted RTL.
+name: sv-waveform-debug
+description: Debug and explain Verilog or SystemVerilog hardware using FST/VCD waveform evidence together with RTL and testbench source. Use for simulation failures, protocol violations, pipeline stalls, state-machine bugs, data/control mismatches, X propagation, reset/clock issues, or any request to locate a hardware root cause from waveforms. Automatically discover waveform and HDL inputs when possible, query bounded time windows, map signals back to RTL hierarchy, and support both .fst and .vcd files.
 ---
 
-# Hardware Debug Waveform
+# SystemVerilog Waveform Debug
 
-## Overview
+Debug from observable behavior toward the earliest causal RTL transition. Keep waveform facts, source interpretation, and hypotheses distinct.
 
-Use this skill to debug or explain behavior from large waveform files (VCD or FST) together with a Scala/Chisel source tree and, when available, emitted RTL.
+## Discover inputs
 
-Path note for future runs: this checkout still has a vendored `pywellen` tree at `wellen/pywellen/pywellen`. Record the path if needed for orientation, but do not treat it as the default main-branch query path.
-
-Core approach:
-
-- use direct waveform queries as the default evidence path
-- use emitted RTL to recover exact ownership and hierarchy
-- use Scala/Chisel source as the primary material for root-cause analysis
-- only inspect generated SystemVerilog if Scala-first analysis is blocked
-
-Direct `wellen` queries now use two cache levels:
-
-- level 1: waveform metadata cache
-- level 2: direct query-result cache for repeated packet and signal-value queries
-
-
-## Workflow
-
-### Step 0 - Resolve inputs
-
-If the user has not already provided them, first try to discover them reliably from local context. Only ask the user when one or more required inputs cannot be found with high confidence.
-
-Required or useful inputs:
-
-- waveform path
-- Chisel source root
-- optional emitted RTL root (`build/rtl`)
-- optional focus scope (e.g. `TOP.SimTop.core.rob`) or debug hint
-
-Recommended prompt when discovery is insufficient:
-
-> Please provide the waveform path, the Chisel source root, and optionally the emitted RTL root (build/rtl), plus any focus scope or debug hint.
-
-
-All commands run from the skill root directory. Use `cd` once at the start:
+Run from the HDL workspace root. Prefer explicit paths when the user provides them; otherwise let the wrapper discover the newest FST/VCD, Verilog/SystemVerilog sources, and candidate top modules.
 
 ```bash
-cd ~/.codex/skills/hardware-debug-waveform
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect
 ```
 
-### Step 1 — Inspect inputs
+Use explicit inputs to resolve ambiguity:
 
 ```bash
-python scripts/hw_debug_cli.py inspect-inputs \
-  --scala-root /path/to/src/main/scala/xiangshan \
-  --waveform /path/to/run.vcd_or_run.fst \
-  [--rtl-root /path/to/build/rtl] \
-  [--focus-scope TOP.SimTop.core.rob] \
-  [--suggestion "hang near rob tail"] \
-  [--top SimTop] \
-  [--window-len 1000]
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect \
+  --waveform build/run.fst --source-root rtl --top tb_top
 ```
 
-`inspect-inputs` validates paths, reports artifact sizes, checks cache status, and **prints the exact commands to run next**. Use those printed commands as the next steps.
+Do not guess when multiple plausible waveforms or top modules remain. Report the candidates and ask for the missing discriminator.
 
-If it warns that artifacts are large, tell the user before proceeding.
+## Build RTL authority
 
-### Step 2 — Build RTL authority (skip if no `--rtl-root`)
+Build hierarchy ownership before correlating waveform paths with source declarations:
 
 ```bash
-python scripts/hw_debug_cli.py build-authority \
-  --rtl-root /path/to/build/rtl \
-  --top SimTop \
-  [--out-dir <authority-out>]
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py authority \
+  --waveform build/run.fst --source-root . --top tb_top
 ```
 
-Reuses cache automatically. Add `--force` to rebuild.
+The wrapper scans `.sv` and `.v`, caches artifacts under `build/wave-debug/`, and reuses them until inputs change. FST is accepted directly; when `fst2vcd` is available, it is converted to a cached VCD to handle parser-incompatible FST attributes.
 
-### Step 3 — Query a debug packet directly from the waveform
+## Query evidence
+
+Query a bounded time window rather than dumping the whole trace:
 
 ```bash
-python scripts/hw_debug_cli.py query-packet \
-  --waveform /path/to/run.vcd_or_run.fst \
-  --window-id w42 \
-  --window-len 1000 \
-  --out <packet-out>/packet_w42.json \
-  [--authority <authority-out>/rtl_authority.sqlite3] \
-  [--focus-scope TOP.SimTop.core.rob]
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py packet \
+  --window 42 --window-len 1000 --focus-scope TOP.tb_top.dut
 ```
 
-Use the window ID that covers the suspected failure. Let `inspect-inputs` suggest the exact command form.
-
-### Step 3b — (Optional) Query one signal value at one time directly from the waveform
+Query one known signal at an exact simulation timestamp:
 
 ```bash
-python scripts/hw_debug_cli.py query-signal-value \
-  --waveform /path/to/run.vcd_or_run.fst \
-  --signal TOP.SimTop.core.rob.commit_valid \
-  --time 123456 \
-  [--window-len 1000]
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py signal \
+  --signal TOP.tb_top.dut.valid_o --time 42000
 ```
 
-Use this when you need the value of one specific signal at one specific simulation time.
+Pass the same `--waveform`, `--source-root`, `--top`, and `--workspace` options when auto-discovery is ambiguous.
 
-### Step 4 — (Optional) Add rough Chisel candidates
+## Analyze
 
-```bash
-python scripts/hw_debug_cli.py rough-map-chisel \
-  --packet <packet-out>/packet_w42.json \
-  --mapping /path/to/rough-mapping.json \
-  --out <packet-out>/packet_w42_rough.json
-```
+Read [references/debug-methodology.md](references/debug-methodology.md) for protocol-specific probes and evidence rules.
 
-Only run this step if a rough mapping artifact is available. Treat results as guesses, not exact source truth.
+1. Establish timescale, clocks, reset polarity, and the first divergence time.
+2. Start at the failing output or assertion and trace its combinational and sequential fan-in backward.
+3. Compare waveform transitions with the exact `always_ff`, `always_comb`, assignment, and instance connections that own them.
+4. Separate testbench drive errors from DUT errors; inspect stimulus and sampling edges.
+5. Check unknown values explicitly. Never coerce `X/Z` to zero in reasoning.
+6. Narrow the window and signal set after each hypothesis. Prefer evidence that can falsify the hypothesis.
+7. Recommend an RTL fix only when waveform timing and source semantics agree; otherwise identify the next bounded probe.
 
-### Step 5 — Analyze
+## Report
 
-1. Read `focus_signals[*].changes` as raw waveform evidence.
-2. If `rtl.match_status == "exact"`, use `module_type` and `local_signal_name` to narrow the search to the most relevant Scala/Chisel source candidates.
-3. Search the Scala root by module name, signal name, and nearby subsystem names to find the best candidates.
-4. Analyze the Scala/Chisel code first.
-5. Present rough Chisel candidates from step 4 only as secondary, lower-confidence hints.
-6. Only inspect generated SystemVerilog if Scala cannot explain the behavior.
+Provide:
 
-If you need a point lookup instead of a window summary, use `query-signal-value`.
+- `Phenomenon`: first incorrect or missing transition, with timestamp/cycle.
+- `Root cause`: module, state/condition, and bug class; label unproven conclusions as hypotheses.
+- `Evidence`: minimal signal relationships plus exact RTL/testbench paths.
+- `Fix or next probe`: concrete RTL change at high confidence, otherwise a precise signal/window query.
 
+Avoid exhaustive signal inventories, raw cycle dumps, and large RTL excerpts.
 
-## Output
+## Engine boundary
 
-Write the answer in two parts:
-
-**Summary** (2-4 sentences)
-
-- For a debug request, include:
-  - `Phenomenon`: one sentence describing the anomaly seen in the waveform
-  - `Root Cause Category`: a standard hardware bug class such as state machine deadlock, data hazard, backpressure stall, or flush-handling miss
-  - `Confidence`: state whether this is high confidence or low confidence
-- For an exploration request, include:
-  - `Function`: what the module does
-  - `Structure`: its main internal buffers, state, and submodules
-  - `Interconnect`: how it connects to other modules
-
-**Detailed Analysis**
-
-- For a debug request:
-  1. Expand the `Root Cause Category` from the summary.
-  2. Cite the most relevant waveform evidence and Scala/Chisel logic that support the hypothesis.
-  3. Give a fix recommendation if confidence is high.
-  4. Otherwise give the next best debugging steps.
-- For an exploration request:
-  1. Support `Function` by using the Scala/Chisel source to explain what the module does, and by using waveform evidence to analyze its key pipeline signals and timing behavior when sufficient evidence is available.
-  2. Support `Structure` with the main state, buffers, queues, or submodules.
-  3. Support `Interconnect` with the other modules, or interfaces that matter most.
-
-Use precise terms in the detailed analysis:
-
-- signals/timing: `rising edge`, `falling edge`, `valid`, `ready`, `handshake`, `backpressure`, `stall`, `flush`, `state transition`
-- architecture/control: `pipeline stage`, `hazard detection`, `forwarding`, `cache hierarchy`, `fetch/decode/execute`, `instruction set architecture`, `bus arbitration`, `memory consistency`, `reorder buffer`, `issue queue`, `commit/retire`
-
-Avoid: raw per-cycle value dumps, long exact-signal lists, large artifact path inventories, large SystemVerilog excerpts, and preprocessing detail.
-Include only the few source files or artifact paths that materially support the analysis.
-
-## Rules
-
-- Let `inspect-inputs` choose default artifact paths; only override when the user asks.
-- If direct `wellen` query fails, surface the error clearly and remind the user that `main` expects `pywellen`; recommend the `no-pywellen` branch only when they explicitly want to avoid that dependency.
-- Reuse cached artifacts; rebuild only when needed or explicitly requested.
-- Reuse both waveform metadata cache and direct query-result cache when available.
-- Treat `rtl_authority.sqlite3` matches as exact RTL ownership.
-- If no `build/rtl` is provided, label the result `waveform-only analysis`.
-- Avoid reading large SystemVerilog files unless Scala-first analysis is blocked.
-
-## Reference
-
-For command flags, artifact layout, and schema details:
-
-- `README_en.md` (English reference)
-- `README.md` (Chinese reference)
-
-For wavedrom language:
-
-- `wavedrom.md`
-
-For artifact json format or database schema:
-
-- `artifact.md`
+Use `vendor/hardware-debug-skill` as the pinned parsing and RTL-authority engine derived from `trace1729/hardware-debug-skill`. Keep generic adapter behavior in this skill and do not modify the submodule.

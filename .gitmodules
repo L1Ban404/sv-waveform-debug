@@ -1,0 +1,3 @@
+[submodule "vendor/hardware-debug-skill"]
+	path = vendor/hardware-debug-skill
+	url = https://github.com/trace1729/hardware-debug-skill.git

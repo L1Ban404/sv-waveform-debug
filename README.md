@@ -1,151 +1,105 @@
-# Waveform Analysis Skill 
+# sv-waveform-debug
 
-## 总结
+[![Smoke test](https://github.com/L1Ban404/sv-waveform-debug/actions/workflows/smoke.yml/badge.svg)](https://github.com/L1Ban404/sv-waveform-debug/actions/workflows/smoke.yml)
 
-使用 `pywellen` 直接查询波形文件，结合 `build/rtl` 构建 chisel -> verilog 信号映射，从而让 LLM 更好地根据波形调试。
->  优先使用环境中的 pywellen 库，如果没有将使用 skill 内置的。
+A Codex skill for debugging Verilog and SystemVerilog from FST/VCD waveform evidence and HDL source.
 
-> `no-pywellen` 会构建更多的离线缓存，查询更快，准确性上稍弱,  如果你希望完全避免 `pywellen`，请切换到 `no-pywellen` 分支。
+It discovers waveform and source inputs, infers likely top modules, converts incompatible FST traces when needed, builds an RTL hierarchy database, and extracts bounded debug packets that an AI coding agent can correlate with RTL and testbench behavior.
 
-## 如何使用
+## Features
 
-### 安装
+- Verilog (`.v`) and SystemVerilog (`.sv`) source discovery
+- FST and VCD waveform discovery and querying
+- Automatic top-module candidate inference
+- Optional FST-to-VCD compatibility conversion through `fst2vcd`
+- Waveform signal to RTL hierarchy/source mapping
+- Bounded time-window packets and point-in-time signal queries
+- Reusable debugging guidance for sequential logic, FSMs, protocols, pipelines, memories, reset, CDC, and X propagation
 
-```bash
-# codex
-mkdir -p ~/.codex/skills/
-cd ~/.codex/skills
-```
+## Install as a project skill
 
-```bash
-# or claude code
-mkdir -p ~/.claude/skills/
-cd ~/.claude/skills/
-```
+From the target project's root:
 
 ```bash
-pip install pywellen # 也可以指定 codex 使用 skill 内置的 pywellen
-git clone https://github.com/trace1729/hardware-debug-skill.git hardware-debug-waveform
-cd hardware-debug-waveform
-# optionly
-    git checkout no-pywellen
+git submodule add git@github.com:L1Ban404/sv-waveform-debug.git \
+  .codex/skills/sv-waveform-debug
+git submodule update --init --recursive
 ```
 
+For an HTTPS checkout:
 
-### 简单使用
-
-```text
-codex
-$Hardware Debug Waveform help me debug xxx.vcd/fst
-$Hardware Debug Waveform explain this module with xxx.vcd/fst
+```bash
+git submodule add https://github.com/L1Ban404/sv-waveform-debug.git \
+  .codex/skills/sv-waveform-debug
+git submodule update --init --recursive
 ```
 
-必要输入：
+Codex discovers the skill from `.codex/skills/sv-waveform-debug/SKILL.md`.
 
-- `--scala-root`：Scala/Chisel 源码树路径
-- `--waveform`：用于 `inspect-inputs`、`query-packet` 与 `query-signal-value` 的波形路径
+## Requirements
 
-常用可选输入：
+- Python 3.12 for the binary bundled by the pinned upstream engine, or a compatible installed `pywellen`
+- `fst2vcd` for FST files that use attributes unsupported by `pywellen` (commonly provided by GTKWave or OSS CAD Suite)
+- Git submodules initialized recursively
 
-- `--rtl-root`：**推荐** emitted RTL 根目录，通常为 `build/rtl`
-- `--focus-scope`：希望聚焦的层级 scope
-- `--suggestion`：人工调试提示
-- `--top`：RTL 顶层模块名，默认 `SimTop`
-- `--window-len`：时间窗长度，默认 `1000`
+No Python package installation is required when the bundled Python 3.12 `pywellen` binary is compatible with the host.
 
+## Usage
 
-## 基本流水线
+Run commands from the HDL workspace root.
 
-### LLM 在底层如何使用这些产物
+Discover inputs:
 
-1. `inspect-inputs` 校验输入路径、估计产物规模，并打印推荐命令。
-2. 若提供 emitted RTL，则通过 `build-authority` 生成精确的 RTL ownership 数据库。
-3. 优先使用 `query-packet --waveform` 或 `query-signal-value --waveform`，由 `wellen` 直接读取波形文件。
-4. 生成的 packet 只保留当前分析时间窗中真正相关的信号变化，并可附带 exact RTL ownership。
-5. LLM 再根据 `module_type`、`local_signal_name`、`focus_scope` 等线索回到 Scala/Chisel 源码中做根因分析。
-6. 查询会复用 `artifacts/waveform_meta/` 下的元数据缓存。
-7. 重复执行 `query-packet --waveform` 与 `query-signal-value --waveform` 时，还会复用 `artifacts/waveform_query/` 下的第二级查询结果缓存。
-
-
-## 详细分析
-
-### 子命令说明
-
-#### `inspect-inputs`
-
-用于检查输入并打印推荐的后续命令。
-
-- 检查 `--scala-root`、`--waveform`、`--rtl-root` 是否存在
-- 估算波形与源码树规模
-- 输出默认 artifact 路径
-- 优先打印直接波形查询命令
-
-#### `build-authority`
-
-从 emitted RTL 构建精确的 RTL authority。
-
-- 解析 `.sv` 与 `.v`
-- 建立实例层级
-- 展开层级化信号名
-- 输出 JSON 与 SQLite 查询产物
-
-#### `query-packet`
-
-生成单个时间窗的 debug packet。
-
-- 输入模式：`--waveform`
-- 可选关联 `--authority`
-- 可选使用 `--focus-scope` 缩小范围
-- 对大型 FST，直接 packet 查询可能较慢
-- 重复的直接 packet 查询会复用第二级查询缓存
-
-#### `query-signal-value`
-
-查询单个信号在指定仿真时刻的值。
-
-- 输入模式：`--waveform`
-- 返回目标时刻所在窗口，以及该时刻之前最近一次已知变更
-- 重复的直接点查询会复用第二级查询缓存
-
-#### `rough-map-chisel`
-
-将外部 rough mapping 结果补充到 packet 中。
-
-- 通过 `rtl.module_type + rtl.local_signal_name` 做粗略 join
-- 只提供候选，不宣称为精确来源
-
-### 产物与 Schema
-
-- 见 `artifact.md`
-
-### Artifacts 目录
-
-默认输出位于：
-
-```text
-hardware-debug-waveform/artifacts/
-├── authority/<fingerprint>/
-├── waveform_meta/<fingerprint>/
-├── waveform_query/<fingerprint>/
-└── packets/<fingerprint>/
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect
 ```
 
-说明如下：
+Resolve ambiguity explicitly:
 
-- `authority/`：`build-authority` 的缓存输出
-- `waveform_meta/`：直接 `--waveform` 查询路径的元数据缓存
-- `waveform_query/`：直接 `query-packet --waveform` 与 `query-signal-value --waveform` 的第二级查询结果缓存
-- `packets/`：CLI 推荐的 packet 默认输出位置
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect \
+  --waveform build/run.fst --source-root rtl --top tb_top
+```
 
-`<fingerprint>` 基于输入文件签名与关键参数生成，因此相同输入通常会复用同一缓存目录。
+Build RTL hierarchy ownership:
 
-### 限制
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py authority \
+  --waveform build/run.fst --source-root . --top tb_top
+```
 
-- 对非常大的 FST，`query-packet --waveform` 可能较慢。
-- `main` 分支默认围绕 `pywellen` 工作；如果你不希望依赖它，请使用 `no-pywellen` 分支。
-- 未提供 `--rtl-root` 时，只能做 waveform-only 分析，无法恢复 exact RTL ownership。
-- `rough-map-chisel` 仅提供粗略候选，不能作为精确来源依据。
+Query a bounded window:
 
-### 鸣谢
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py packet \
+  --window 42 --window-len 1000 --focus-scope TOP.tb_top.dut
+```
 
-本项目基于 [wellen](https://github.com/ekiwi/wellen)
+Query one signal:
+
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py signal \
+  --signal TOP.tb_top.dut.valid_o --time 42000
+```
+
+Generated caches and packets are written to `build/wave-debug/` by default.
+
+## How it works
+
+The project-specific wrapper provides discovery, compatibility handling, cache placement, and source-path restoration. The pinned [`trace1729/hardware-debug-skill`](https://github.com/trace1729/hardware-debug-skill) submodule provides waveform parsing and RTL authority extraction.
+
+The adapter intentionally does not encode a specific processor, pipeline, simulator, or test framework.
+
+## Contributing
+
+Keep changes simulator- and architecture-independent. Test both explicit input paths and automatic discovery. For waveform parser changes, contribute upstream when the behavior belongs to the underlying engine.
+
+Run the repository smoke test with:
+
+```bash
+python tests/test_smoke.py
+```
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
