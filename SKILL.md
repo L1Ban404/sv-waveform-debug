@@ -1,81 +1,81 @@
 ---
 name: sv-waveform-debug
-description: Debug and explain Verilog or SystemVerilog hardware using FST/VCD waveform evidence together with RTL and testbench source. Use for simulation failures, protocol violations, pipeline stalls, state-machine bugs, data/control mismatches, X propagation, reset/clock issues, or any request to locate a hardware root cause from waveforms. Automatically discover waveform and HDL inputs when possible, query bounded time windows, map signals back to RTL hierarchy, and support both .fst and .vcd files.
+description: Investigate and explain Verilog or SystemVerilog failures from FST/VCD waveform evidence and HDL source. Use for simulation failures, assertion violations, protocol bugs, pipeline stalls, FSM errors, data/control mismatches, X/Z propagation, reset/clock problems, or requests to find and optionally fix an RTL root cause. Discover scopes and signals, compare good and bad traces, query bounded time windows, map waveform paths to RTL, test causal hypotheses, and support waveform-only triage when source is unavailable.
 ---
 
 # SystemVerilog Waveform Debug
 
-Debug from observable behavior toward the earliest causal RTL transition. Keep waveform facts, source interpretation, and hypotheses distinct.
+Work from observable behavior toward the earliest causal RTL transition. Keep facts, interpretations, and hypotheses separate.
 
-## Discover inputs
+## Start safely
 
-Run from the HDL workspace root. Prefer explicit paths when the user provides them; otherwise let the wrapper discover the newest FST/VCD, Verilog/SystemVerilog sources, and candidate top modules.
-
-```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect
-```
-
-Use explicit inputs to resolve ambiguity:
+Run from the HDL workspace root. Check capabilities, then inspect inputs:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect \
-  --waveform build/run.fst --source-root rtl --top tb_top
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py doctor
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect --json
 ```
 
-Do not guess when multiple plausible waveforms or top modules remain. Report the candidates and ask for the missing discriminator.
+Pass `--waveform`, `--source-root`, `--filelist`, and `--top` when discovery is ambiguous. Never silently choose among multiple plausible tops or traces.
 
-## Build RTL authority
+## Investigate iteratively
 
-Build hierarchy ownership before correlating waveform paths with source declarations:
+1. Establish waveform provenance, timescale, clocks, resets, failure time, and the first incorrect externally visible signal.
+2. Discover paths instead of guessing them:
+
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py scopes --json
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py signals \
+  --scope tb.dut --match valid --limit 40 --json
+```
+
+3. Probe a small window and a falsifiable set of signals:
+
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py probe \
+  --around 420ns --radius 30ns --scope tb.dut \
+  --match ready --signal tb.dut.clk --clock tb.dut.clk
+```
+
+Use `--start/--end` for explicit windows and `--max-signals`/`--max-changes` to control evidence size. Preserve `X/Z`; never reinterpret them as zero.
+
+4. When a known-good trace exists, locate the earliest divergence before reading downstream symptoms:
+
+```bash
+python .codex/skills/sv-waveform-debug/scripts/wave_debug.py compare good.vcd bad.vcd \
+  --scope tb.dut --match state
+```
+
+5. Build RTL authority only when source mapping is needed:
 
 ```bash
 python .codex/skills/sv-waveform-debug/scripts/wave_debug.py authority \
-  --waveform build/run.fst --source-root . --top tb_top
+  --waveform bad.fst --filelist sim/files.f --top tb_top
 ```
 
-The wrapper scans `.sv` and `.v`, caches artifacts under `build/wave-debug/`, and reuses them until inputs change. FST is accepted directly; when `fst2vcd` is available, it is converted to a cached VCD to handle parser-incompatible FST attributes.
+Re-run `probe` with the same source/top options. Treat `exact` authority as ownership evidence; treat `heuristic-text-match` source context only as navigation candidates.
 
-## Query evidence
+6. Form one causal hypothesis at a time. State what the next probe should show if it is true and what would falsify it. Narrow or extend the window only as evidence requires.
 
-Query a bounded time window rather than dumping the whole trace:
+Read [references/debug-methodology.md](references/debug-methodology.md) when reasoning about sequential timing, protocols, pipelines, memories, CDC, reset, or unknown propagation.
 
-```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py packet \
-  --window 42 --window-len 1000 --focus-scope TOP.tb_top.dut
-```
+## Diagnose and fix
 
-Query one known signal at an exact simulation timestamp:
+Report these sections:
 
-```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py signal \
-  --signal TOP.tb_top.dut.valid_o --time 42000
-```
+- `Observed`: waveform facts with timestamp/cycle and signal paths.
+- `Inferred`: source semantics that follow from the observed facts.
+- `Hypothesis`: unproven causal claims plus the falsifying probe.
+- `Root cause`: module, condition, bug class, source location, and confidence.
+- `Fix or next probe`: a concrete change only at high confidence; otherwise the smallest next query.
+- `Verification`: targeted and broader regressions run, or remaining gaps.
 
-Pass the same `--waveform`, `--source-root`, `--top`, and `--workspace` options when auto-discovery is ambiguous.
+Do not edit RTL unless the user asks for a fix or the request clearly includes implementation. When authorized, preserve unrelated changes, add a regression that fails for the diagnosed behavior, make the smallest RTL change, run the targeted test, then run the relevant broader suite.
 
-## Analyze
+## Bound the evidence
 
-Read [references/debug-methodology.md](references/debug-methodology.md) for protocol-specific probes and evidence rules.
+Prefer fewer than 64 signals and 200 changes per probe. If output is truncated, narrow by scope, name, time, or clock edge. Avoid raw waveform dumps, exhaustive signal inventories, and large source excerpts.
 
-1. Establish timescale, clocks, reset polarity, and the first divergence time.
-2. Start at the failing output or assertion and trace its combinational and sequential fan-in backward.
-3. Compare waveform transitions with the exact `always_ff`, `always_comb`, assignment, and instance connections that own them.
-4. Separate testbench drive errors from DUT errors; inspect stimulus and sampling edges.
-5. Check unknown values explicitly. Never coerce `X/Z` to zero in reasoning.
-6. Narrow the window and signal set after each hypothesis. Prefer evidence that can falsify the hypothesis.
-7. Recommend an RTL fix only when waveform timing and source semantics agree; otherwise identify the next bounded probe.
+Use VCD directly on Python 3.10+. For FST, the tool tries compatible `pywellen`, then cached `fst2vcd` conversion. Run `doctor` for actionable dependency failures.
 
-## Report
-
-Provide:
-
-- `Phenomenon`: first incorrect or missing transition, with timestamp/cycle.
-- `Root cause`: module, state/condition, and bug class; label unproven conclusions as hypotheses.
-- `Evidence`: minimal signal relationships plus exact RTL/testbench paths.
-- `Fix or next probe`: concrete RTL change at high confidence, otherwise a precise signal/window query.
-
-Avoid exhaustive signal inventories, raw cycle dumps, and large RTL excerpts.
-
-## Engine boundary
-
-Use `vendor/hardware-debug-skill` as the pinned parsing and RTL-authority engine derived from `trace1729/hardware-debug-skill`. Keep generic adapter behavior in this skill and do not modify the submodule.
+Keep generic adapter behavior in this repository. Do not modify `vendor/hardware-debug-skill`.

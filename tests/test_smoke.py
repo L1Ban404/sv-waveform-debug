@@ -29,9 +29,26 @@ def run(*arguments: str) -> str:
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="sv-waveform-debug-") as temporary:
         output = Path(temporary)
-        common = ("--workspace", str(FIXTURE), "--out-dir", str(output))
-        inspected = run("inspect", *common)
-        assert "selected-top: top_tb" in inspected
+        common = (
+            "--workspace", str(FIXTURE),
+            "--waveform", str(FIXTURE / "wave.vcd"),
+            "--out-dir", str(output),
+        )
+        doctor = json.loads(run("doctor", "--json"))
+        assert doctor["capabilities"]["vcd"]["available"] is True
+
+        inspected = json.loads(run("inspect", *common, "--json"))
+        assert inspected["selected_top"] == "top_tb"
+        assert inspected["waveform"]["backend"] == "python-vcd"
+        assert inspected["timescale"]["unit"] == "ns"
+
+        scopes = json.loads(run("scopes", *common, "--json"))
+        assert {scope["path"] for scope in scopes["scopes"]} == {"top_tb", "top_tb.u_dut"}
+
+        discovered = json.loads(
+            run("signals", *common, "--scope", "top_tb.u_dut", "--match", "valid", "--json")
+        )
+        assert [signal["path"] for signal in discovered["signals"]] == ["top_tb.u_dut.valid_o"]
 
         run("authority", *common, "--force")
         packet_path = Path(
@@ -47,9 +64,31 @@ def main() -> int:
             ).strip()
         )
         packet = json.loads(packet_path.read_text(encoding="utf-8"))
-        signals = packet["focus_signals"]
+        assert packet["schema_version"] == "0.2"
+        signals = packet["signals"]
         assert len(signals) == 3
         assert all(signal["rtl"]["match_status"] == "exact" for signal in signals)
+
+        evidence = json.loads(
+            run(
+                "probe",
+                *common,
+                "--scope",
+                "top_tb.u_dut",
+                "--match",
+                "valid",
+                "--signal",
+                "top_tb.u_dut.clk",
+                "--clock",
+                "top_tb.u_dut.clk",
+                "--start",
+                "0ns",
+                "--end",
+                "20ns",
+            )
+        )
+        assert len(evidence["signals"]) == 2
+        assert evidence["clock_samples"][0]["time"]["ticks"] == 5
 
         point = json.loads(
             run(
@@ -58,13 +97,19 @@ def main() -> int:
                 "--signal",
                 "TOP.top_tb.u_dut.valid_o",
                 "--time",
-                "16",
+                "16ns",
                 "--window-len",
                 "10",
             )
         )
         assert point["value_at_time"]["value"] == "1"
-        assert point["value_at_time"]["t"] == 15
+        assert point["value_at_time"]["time"]["ticks"] == 15
+
+        compared = json.loads(
+            run("compare", str(FIXTURE / "wave.vcd"), str(FIXTURE / "wave_bad.vcd"))
+        )
+        assert compared["first_divergence"]["signal"] == "top_tb.u_dut.valid_o"
+        assert compared["first_divergence"]["time_ticks"] == 15
 
     print("smoke test passed")
     return 0

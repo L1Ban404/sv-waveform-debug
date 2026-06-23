@@ -2,31 +2,24 @@
 
 [![Smoke test](https://github.com/L1Ban404/sv-waveform-debug/actions/workflows/smoke.yml/badge.svg)](https://github.com/L1Ban404/sv-waveform-debug/actions/workflows/smoke.yml)
 
-A Codex skill for debugging Verilog and SystemVerilog from FST/VCD waveform evidence and HDL source.
+A Codex skill and portable CLI for evidence-driven Verilog/SystemVerilog debugging from VCD or FST waveforms.
 
-It discovers waveform and source inputs, infers likely top modules, converts incompatible FST traces when needed, builds an RTL hierarchy database, and extracts bounded debug packets that an AI coding agent can correlate with RTL and testbench behavior.
+Version 0.2 turns waveform analysis into an iterative investigation: discover hierarchy and signals, query compact windows, compare good and bad traces, map activity to RTL ownership, test hypotheses, and close the loop with an authorized RTL fix and regression.
 
-## Features
+## Capabilities
 
-- Verilog (`.v`) and SystemVerilog (`.sv`) source discovery
-- FST and VCD waveform discovery and querying
-- Automatic top-module candidate inference
-- Optional FST-to-VCD compatibility conversion through `fst2vcd`
-- Waveform signal to RTL hierarchy/source mapping
-- Bounded time-window packets and point-in-time signal queries
-- Reusable debugging guidance for sequential logic, FSMs, protocols, pipelines, memories, reset, CDC, and X propagation
+- Pure Python 3.10+ streaming VCD metadata and change queries
+- FST through compatible `pywellen` or cached `fst2vcd` conversion
+- Waveform-only scope, signal, point, and bounded-window queries
+- Physical time units and clock-edge samples
+- Good/bad trace first-divergence analysis
+- Verilog/SystemVerilog discovery plus `.f/.flist`, include, define, and exclude inputs
+- RTL hierarchy authority and source-navigation context
+- Bounded JSON evidence designed for an LLM context window
+
+The adapter is simulator- and architecture-independent.
 
 ## Install as a project skill
-
-From the target project's root:
-
-```bash
-git submodule add git@github.com:L1Ban404/sv-waveform-debug.git \
-  .codex/skills/sv-waveform-debug
-git submodule update --init --recursive
-```
-
-For an HTTPS checkout:
 
 ```bash
 git submodule add https://github.com/L1Ban404/sv-waveform-debug.git \
@@ -34,71 +27,65 @@ git submodule add https://github.com/L1Ban404/sv-waveform-debug.git \
 git submodule update --init --recursive
 ```
 
-Codex discovers the skill from `.codex/skills/sv-waveform-debug/SKILL.md`.
-
-## Requirements
-
-- Python 3.12 for the binary bundled by the pinned upstream engine, or a compatible installed `pywellen`
-- `fst2vcd` for FST files that use attributes unsupported by `pywellen` (commonly provided by GTKWave or OSS CAD Suite)
-- Git submodules initialized recursively
-
-No Python package installation is required when the bundled Python 3.12 `pywellen` binary is compatible with the host.
-
-## Usage
-
-Run commands from the HDL workspace root.
-
-Discover inputs:
+SSH works as well:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect
+git submodule add git@github.com:L1Ban404/sv-waveform-debug.git \
+  .codex/skills/sv-waveform-debug
+git submodule update --init --recursive
 ```
 
-Resolve ambiguity explicitly:
+## Quick start
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect \
-  --waveform build/run.fst --source-root rtl --top tb_top
+CLI=.codex/skills/sv-waveform-debug/scripts/wave_debug.py
+
+python "$CLI" doctor
+python "$CLI" inspect --json
+python "$CLI" scopes --json
+python "$CLI" signals --scope tb.dut --match valid --json
+python "$CLI" probe --around 420ns --radius 30ns \
+  --scope tb.dut --signal tb.dut.clk --clock tb.dut.clk
 ```
 
-Build RTL hierarchy ownership:
+Map selected activity back to RTL:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py authority \
-  --waveform build/run.fst --source-root . --top tb_top
+python "$CLI" authority --waveform build/fail.fst \
+  --filelist sim/files.f --top tb_top
+python "$CLI" probe --waveform build/fail.fst --around 420ns --radius 20ns \
+  --scope tb_top.dut --match state --filelist sim/files.f --top tb_top
 ```
 
-Query a bounded window:
+Compare traces:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py packet \
-  --window 42 --window-len 1000 --focus-scope TOP.tb_top.dut
+python "$CLI" compare passing.vcd failing.vcd --scope tb.dut
 ```
 
-Query one signal:
+Run `python "$CLI" <command> --help` for all options. Times accept integer waveform ticks or physical values such as `42ns` and `1.5us`.
+
+## Backends
+
+VCD requires only Python 3.10 or newer. FST uses the first available path:
+
+1. a compatible installed `pywellen`;
+2. the pinned engine's compatible bundled binary;
+3. `fst2vcd`, commonly provided by GTKWave or OSS CAD Suite.
+
+`doctor --json` reports exact capabilities and remediation. The pinned [`trace1729/hardware-debug-skill`](https://github.com/trace1729/hardware-debug-skill) submodule remains the RTL-authority engine.
+
+## Development
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py signal \
-  --signal TOP.tb_top.dut.valid_o --time 42000
-```
-
-Generated caches and packets are written to `build/wave-debug/` by default.
-
-## How it works
-
-The project-specific wrapper provides discovery, compatibility handling, cache placement, and source-path restoration. The pinned [`trace1729/hardware-debug-skill`](https://github.com/trace1729/hardware-debug-skill) submodule provides waveform parsing and RTL authority extraction.
-
-The adapter intentionally does not encode a specific processor, pipeline, simulator, or test framework.
-
-## Contributing
-
-Keep changes simulator- and architecture-independent. Test both explicit input paths and automatic discovery. For waveform parser changes, contribute upstream when the behavior belongs to the underlying engine.
-
-Run the repository smoke test with:
-
-```bash
+python -m unittest discover -s tests -p 'test_*.py'
 python tests/test_smoke.py
+python -m py_compile scripts/wave_debug.py scripts/wave_debug_lib/*.py
+python -m pip install -r requirements-dev.txt
+python tests/validate_skill.py
 ```
+
+CI checks the portable VCD path on Python 3.10–3.13 and exercises both direct and converted FST paths on Python 3.12.
 
 ## License
 
