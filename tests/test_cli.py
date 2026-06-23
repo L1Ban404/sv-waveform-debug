@@ -31,8 +31,10 @@ class CliTests(unittest.TestCase):
         self.assertIn(direct["source"], {"bundled", "installed", None})
         self.assertIn("soabi", direct["runtime"])
         authority = result["capabilities"]["rtl_authority"]
-        self.assertEqual(authority["match_status"], "static-source-match")
-        self.assertFalse(authority["exact"])
+        self.assertEqual(authority["default_backend"], "auto")
+        self.assertEqual(authority["backends"]["static"]["match_status"], "static-source-match")
+        self.assertFalse(authority["backends"]["static"]["exact"])
+        self.assertEqual(authority["backends"]["verilator"]["match_status"], "exact")
 
     def test_waveform_only_probe_is_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -103,7 +105,7 @@ class CliTests(unittest.TestCase):
                 "--workspace", str(ROOT / "tests/fixtures"), "--waveform", str(FIXTURE),
                 "--out-dir", str(output), "--top", "top_tb",
             )
-            invoke("authority", *common)
+            invoke("authority", *common, "--authority-backend", "static")
             result = json.loads(
                 invoke("probe", *common, "--scope", "top_tb.u_dut", "--start", "0", "--end", "20").stdout
             )
@@ -111,7 +113,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(all(row["rtl"]["match_status"] == "static-source-match" for row in result["signals"]))
             self.assertTrue(all(row["rtl"]["width_status"] == "match" for row in result["signals"]))
             authority = result["provenance"]["authority"]
-            self.assertEqual(authority["schema_version"], "0.3")
+            self.assertEqual(authority["schema_version"], "0.4")
             self.assertTrue(authority["limitations"])
 
 

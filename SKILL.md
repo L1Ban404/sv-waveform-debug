@@ -50,10 +50,10 @@ python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py co
 
 ```bash
 python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py authority \
-  --waveform bad.fst --filelist sim/files.f --top tb_top
+  --waveform bad.fst --filelist sim/files.f --top tb_top --authority-backend auto
 ```
 
-Re-run `probe` with the same source/top options. Treat `static-source-match` authority as an ownership candidate and verify it against waveform hierarchy for generate-, interface-, package-, or macro-heavy RTL. Treat `heuristic-text-match` source context only as a navigation candidate. Reserve `exact` for a future compiler-elaborated backend.
+Re-run `probe` with the same source/top options. `auto` selects Verilator elaboration when its JSON interface is available; only its `exact` result is compiler-elaborated, and it must use the same sources, include paths, defines, and top as the simulation. Treat `static-source-match` authority as an ownership candidate and verify it against waveform hierarchy for generate-, interface-, package-, or macro-heavy RTL. Use `--authority-backend verilator` to require elaboration or `static` to require the portable fallback. Treat `heuristic-text-match` source context only as a navigation candidate.
 
 6. Form one causal hypothesis at a time. State what the next probe should show if it is true and what would falsify it. Narrow or extend the window only as evidence requires.
 

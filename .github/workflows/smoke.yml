@@ -34,3 +34,13 @@ jobs:
       - run: python -c "import json; assert json.load(open('/tmp/direct.json'))['waveform']['backend'] == 'pywellen'"
       - run: SV_WAVE_DEBUG_DISABLE_PYWELLEN=1 python scripts/wave_debug.py inspect --workspace tests/fixtures --waveform /tmp/wave.fst --out-dir /tmp/fallback --json > /tmp/fallback.json
       - run: python -c "import json; assert json.load(open('/tmp/fallback.json'))['waveform']['backend'] == 'fst2vcd+python-vcd'"
+
+  elaboration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y verilator
+      - run: python -m unittest discover -s tests -p 'test_*.py'

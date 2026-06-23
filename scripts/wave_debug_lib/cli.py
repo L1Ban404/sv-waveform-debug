@@ -277,7 +277,10 @@ def _authority(args: argparse.Namespace) -> int:
     top, _ = _top(args, manifest, wave, waveform, True)
     assert top is not None
     destination = output / "authority" / top
-    build_authority(manifest.files, top, destination, args.force)
+    build_authority(
+        manifest.files, top, destination, args.force, args.authority_backend,
+        manifest.include_dirs, manifest.defines,
+    )
     print(destination)
     return 0
 
@@ -336,10 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
     signals.add_argument("--match", action="append", default=[])
     signals.add_argument("--limit", type=int, default=100)
     signals.add_argument("--json", action="store_true")
-    authority = sub.add_parser("authority", help="build static RTL hierarchy ownership candidates")
+    authority = sub.add_parser("authority", help="build elaborated RTL ownership when available, otherwise static candidates")
     _add_wave_inputs(authority)
     _add_source_inputs(authority)
     authority.add_argument("--force", action="store_true")
+    authority.add_argument("--authority-backend", choices=("auto", "verilator", "static"), default="auto")
     signal = sub.add_parser("signal", help="query one signal at a timestamp")
     _add_wave_inputs(signal)
     signal.add_argument("--signal", required=True, dest="signal_path")

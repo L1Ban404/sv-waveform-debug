@@ -50,7 +50,7 @@ def main() -> int:
         )
         assert [signal["path"] for signal in discovered["signals"]] == ["top_tb.u_dut.valid_o"]
 
-        run("authority", *common, "--force")
+        run("authority", *common, "--force", "--authority-backend", "static")
         packet_path = Path(
             run(
                 "packet",
@@ -64,7 +64,7 @@ def main() -> int:
             ).strip()
         )
         packet = json.loads(packet_path.read_text(encoding="utf-8"))
-        assert packet["schema_version"] == "0.3"
+        assert packet["schema_version"] == "0.4"
         signals = packet["signals"]
         assert len(signals) == 3
         assert all(signal["rtl"]["match_status"] == "static-source-match" for signal in signals)

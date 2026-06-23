@@ -11,19 +11,41 @@ from .rtl_authority import (
     AUTHORITY_MATCH_STATUS,
     build_rtl_authority,
 )
+from .elaboration import VERILATOR_BACKEND, VERILATOR_MATCH_STATUS, build_verilator_authority, verilator_diagnostics
 
 
-def build_authority(files: list[Path], top: str, output: Path, force: bool) -> None:
-    build_rtl_authority(files, top, output, force)
+def build_authority(
+    files: list[Path], top: str, output: Path, force: bool, backend: str = "auto",
+    include_dirs: list[Path] | None = None, defines: list[str] | None = None,
+) -> str:
+    if backend not in {"auto", "verilator", "static"}:
+        raise ValueError(f"unsupported authority backend: {backend}")
+    if backend in {"auto", "verilator"}:
+        try:
+            build_verilator_authority(files, top, output, force, include_dirs, defines)
+            return VERILATOR_BACKEND
+        except RuntimeError:
+            if backend == "verilator":
+                raise
+    build_rtl_authority(files, top, output, force, include_dirs, defines)
+    return AUTHORITY_BACKEND
 
 
 def authority_diagnostics() -> dict[str, object]:
     return {
         "available": True,
-        "backend": AUTHORITY_BACKEND,
-        "match_status": AUTHORITY_MATCH_STATUS,
-        "exact": False,
-        "limitations": list(AUTHORITY_LIMITATIONS),
+        "default_backend": "auto",
+        "backends": {
+            "static": {
+                "available": True, "backend": AUTHORITY_BACKEND,
+                "match_status": AUTHORITY_MATCH_STATUS, "exact": False,
+                "limitations": list(AUTHORITY_LIMITATIONS),
+            },
+            "verilator": {
+                **verilator_diagnostics(), "backend": VERILATOR_BACKEND,
+                "match_status": VERILATOR_MATCH_STATUS, "exact": True,
+            },
+        },
     }
 
 

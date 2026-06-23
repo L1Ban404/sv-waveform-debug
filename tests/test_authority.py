@@ -12,6 +12,7 @@ import sys
 
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from wave_debug_lib.elaboration import build_verilator_authority, verilator_diagnostics
 from wave_debug_lib.rtl_authority import build_rtl_authority, parse_modules
 
 
@@ -63,13 +64,13 @@ endmodule
 
             table = json.loads((output / "rtl_authority_table.json").read_text(encoding="utf-8"))
             self.assertEqual(table["top"], "top")
-            self.assertEqual(table["schema_version"], "0.3")
+            self.assertEqual(table["schema_version"], "0.4")
             self.assertEqual(table["authority"]["match_status"], "static-source-match")
             self.assertTrue(table["signals"])
             self.assertTrue(all(row["match_status"] == "static-source-match" for row in table["signals"]))
             with sqlite3.connect(output / "rtl_authority.sqlite3") as connection:
                 metadata = dict(connection.execute("select key, value from authority_metadata"))
-            self.assertEqual(metadata["schema_version"], "0.3")
+            self.assertEqual(metadata["schema_version"], "0.4")
             self.assertEqual(metadata["backend"], "internal-static-parser")
             schema = json.loads((ROOT / "schemas/authority.schema.json").read_text(encoding="utf-8"))
             self.assertEqual(schema["properties"]["schema_version"]["const"], table["schema_version"])
@@ -122,6 +123,19 @@ module top; leaf #(.WIDTH(MISSING_MACRO)) u_leaf (); endmodule
                 ).fetchone()
             self.assertEqual(width, 8)
             self.assertEqual(confidence, "low")
+
+    @unittest.skipUnless(verilator_diagnostics()["available"], "Verilator is not installed")
+    def test_verilator_elaboration_is_exact_and_applies_parameters(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "out"
+            rtl = ROOT / "tests/fixtures/elaboration.sv"
+            build_verilator_authority([rtl], "elaboration_top", output)
+            table = json.loads((output / "rtl_authority_table.json").read_text(encoding="utf-8"))
+            row = next(item for item in table["signals"] if item["full_signal_name"] == "elaboration_top.u_leaf.value")
+            self.assertEqual(table["authority"]["match_status"], "exact")
+            self.assertEqual(row["decl_width_bits"], 13)
+            self.assertEqual(row["confidence"], "high")
 
 
 if __name__ == "__main__":

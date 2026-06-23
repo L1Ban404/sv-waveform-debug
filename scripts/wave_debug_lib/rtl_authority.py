@@ -4,9 +4,11 @@ import ast
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
+import tempfile
 
 from . import AUTHORITY_SCHEMA_VERSION
 
@@ -417,31 +419,48 @@ def _authority_rows(modules: dict[str, ModuleDecl], top: str) -> list[dict[str, 
     return rows
 
 
-def _identity(files: list[Path], top: str) -> dict[str, object]:
+def authority_identity(
+    files: list[Path], top: str, backend: str, include_dirs: list[Path] | None = None,
+    defines: list[str] | None = None,
+) -> dict[str, object]:
     sources = []
     for path in files:
         sources.append({"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
-    return {"engine": f"{AUTHORITY_BACKEND}-v2", "top": top, "sources": sources}
+    return {
+        "engine": f"{backend}-v3", "top": top, "sources": sources,
+        "include_dirs": [str(path.resolve()) for path in include_dirs or []],
+        "defines": list(defines or []),
+    }
 
 
-def build_rtl_authority(files: list[Path], top: str, output: Path, force: bool = False) -> None:
-    identity = _identity(files, top)
+def _atomic_json(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        handle.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+        temporary = Path(handle.name)
+    os.replace(temporary, path)
+
+
+def authority_cache_matches(output: Path, identity: dict[str, object]) -> bool:
     metadata = output / "cache_meta.json"
     required = [output / name for name in ("rtl_authority.sqlite3", "rtl_authority_table.json", "rtl_authority_index.json")]
-    if not force and metadata.is_file() and all(path.is_file() for path in required):
-        try:
-            if json.loads(metadata.read_text(encoding="utf-8")) == identity:
-                return
-        except json.JSONDecodeError:
-            pass
-    modules = parse_modules(files)
-    rows = _authority_rows(modules, top)
+    if not metadata.is_file() or not all(path.is_file() for path in required):
+        return False
+    try:
+        return json.loads(metadata.read_text(encoding="utf-8")) == identity
+    except json.JSONDecodeError:
+        return False
+
+
+def write_authority_artifacts(
+    rows: list[dict[str, object]], top: str, output: Path, identity: dict[str, object],
+    authority_info: dict[str, object], force: bool = False,
+) -> bool:
+    """Write a self-consistent authority cache. Return True when rebuilt."""
+    metadata = output / "cache_meta.json"
+    if not force and authority_cache_matches(output, identity):
+        return False
     output.mkdir(parents=True, exist_ok=True)
-    authority_info = {
-        "backend": AUTHORITY_BACKEND,
-        "match_status": AUTHORITY_MATCH_STATUS,
-        "limitations": list(AUTHORITY_LIMITATIONS),
-    }
     table = {
         "schema_version": AUTHORITY_SCHEMA_VERSION,
         "top": top,
@@ -454,8 +473,8 @@ def build_rtl_authority(files: list[Path], top: str, output: Path, force: bool =
         "authority": authority_info,
         "signals": {str(row["full_signal_name"]): row for row in rows},
     }
-    (output / "rtl_authority_table.json").write_text(json.dumps(table, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    (output / "rtl_authority_index.json").write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _atomic_json(output / "rtl_authority_table.json", table)
+    _atomic_json(output / "rtl_authority_index.json", index)
     database = output / "rtl_authority.sqlite3"
     temporary = database.with_suffix(".sqlite3.tmp")
     temporary.unlink(missing_ok=True)
@@ -477,10 +496,32 @@ def build_rtl_authority(files: list[Path], top: str, output: Path, force: bool =
             "insert into authority_metadata values (?, ?)",
             (
                 ("schema_version", AUTHORITY_SCHEMA_VERSION),
-                ("backend", AUTHORITY_BACKEND),
-                ("match_status", AUTHORITY_MATCH_STATUS),
-                ("limitations", json.dumps(AUTHORITY_LIMITATIONS)),
+                ("backend", str(authority_info["backend"])),
+                ("match_status", str(authority_info["match_status"])),
+                ("limitations", json.dumps(authority_info["limitations"])),
             ),
         )
-    temporary.replace(database)
-    metadata.write_text(json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, database)
+    _atomic_json(metadata, identity)
+    return True
+
+
+def build_rtl_authority(
+    files: list[Path], top: str, output: Path, force: bool = False,
+    include_dirs: list[Path] | None = None, defines: list[str] | None = None,
+) -> None:
+    identity = authority_identity(files, top, AUTHORITY_BACKEND, include_dirs, defines)
+    if not force and authority_cache_matches(output, identity):
+        return
+    modules = parse_modules(files)
+    rows = _authority_rows(modules, top)
+    authority_info = {
+        "backend": AUTHORITY_BACKEND,
+        "match_status": AUTHORITY_MATCH_STATUS,
+        "limitations": list(AUTHORITY_LIMITATIONS),
+    }
+    write_authority_artifacts(
+        rows, top, output,
+        identity,
+        authority_info, force,
+    )

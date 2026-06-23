@@ -4,7 +4,7 @@
 
 A Codex skill and portable CLI for evidence-driven Verilog/SystemVerilog debugging from VCD or FST waveforms.
 
-Version 0.3 turns waveform analysis into an iterative investigation: discover hierarchy and signals, query compact windows, compare good and bad traces, map activity to RTL ownership, test hypotheses, and close the loop with an authorized RTL fix and regression.
+Version 0.4 turns waveform analysis into an iterative investigation: discover hierarchy and signals, query compact windows, compare good and bad traces, map activity to RTL ownership, test hypotheses, and close the loop with an authorized RTL fix and regression.
 
 ## Capabilities
 
@@ -50,7 +50,7 @@ Map selected activity back to RTL:
 
 ```bash
 python "$CLI" authority --waveform build/fail.fst \
-  --filelist sim/files.f --top tb_top
+  --filelist sim/files.f --top tb_top --authority-backend auto
 python "$CLI" probe --waveform build/fail.fst --around 420ns --radius 20ns \
   --scope tb_top.dut --match state --filelist sim/files.f --top tb_top
 ```
@@ -71,11 +71,11 @@ VCD requires only Python 3.10 or newer. FST uses the first available path:
 2. a compatible installed `pywellen` on other platforms;
 3. `fst2vcd`, commonly provided by GTKWave or OSS CAD Suite.
 
-`doctor --json` reports backend provenance, runtime ABI, capabilities, and remediation. RTL hierarchy authority is built by this repository's internal parser, so installation does not require nested Git submodules. Its results are labeled `static-source-match`: useful ownership candidates, but not equivalent to compiler elaboration for complex generate, interface, package, or preprocessor-heavy designs.
+`doctor --json` reports backend provenance, runtime ABI, capabilities, and remediation. RTL authority defaults to `auto`: it uses Verilator's elaborated JSON when the installed Verilator supports `--json-only`, labeling the result `exact` with high confidence. Use `--authority-backend static` for the internal no-dependency fallback; it is labeled `static-source-match` and is useful for ownership candidates, but not equivalent to compiler elaboration for complex generate, interface, package, or preprocessor-heavy designs. An explicit `--authority-backend verilator` never silently falls back.
 
 The bundled `pywellen` component is distributed under BSD-3-Clause; see `third_party/pywellen/LICENSE`.
 
-Authority JSON and SQLite metadata use the same `0.3` schema version. The JSON contract is published in `schemas/authority.schema.json`; consumers should reject unsupported versions instead of guessing field semantics.
+Authority JSON and SQLite metadata use the same `0.4` schema version. The JSON contract is published in `schemas/authority.schema.json`; consumers should reject unsupported versions instead of guessing field semantics. Authority files and cache metadata are written atomically, while cache identity includes the selected backend, sources, include paths, and definitions.
 
 ## Development
 
