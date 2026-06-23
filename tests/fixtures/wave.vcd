@@ -2,7 +2,7 @@ $date
   synthetic smoke test
 $end
 $version
-  sv-waveform-debug test
+  systemverilog-waveform-debug-skill test
 $end
 $timescale 1ns $end
 $scope module top_tb $end

@@ -27,7 +27,7 @@ def run(*arguments: str) -> str:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="sv-waveform-debug-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="systemverilog-waveform-debug-skill-") as temporary:
         output = Path(temporary)
         common = (
             "--workspace", str(FIXTURE),

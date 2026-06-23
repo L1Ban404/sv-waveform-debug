@@ -1,6 +1,6 @@
-# sv-waveform-debug
+# systemverilog-waveform-debug-skill
 
-[![Smoke test](https://github.com/L1Ban404/sv-waveform-debug/actions/workflows/smoke.yml/badge.svg)](https://github.com/L1Ban404/sv-waveform-debug/actions/workflows/smoke.yml)
+[![Smoke test](https://github.com/L1Ban404/systemverilog-waveform-debug-skill/actions/workflows/smoke.yml/badge.svg)](https://github.com/L1Ban404/systemverilog-waveform-debug-skill/actions/workflows/smoke.yml)
 
 A Codex skill and portable CLI for evidence-driven Verilog/SystemVerilog debugging from VCD or FST waveforms.
 
@@ -22,23 +22,23 @@ The adapter is simulator- and architecture-independent.
 ## Install as a project skill
 
 ```bash
-git submodule add https://github.com/L1Ban404/sv-waveform-debug.git \
-  .codex/skills/sv-waveform-debug
+git submodule add https://github.com/L1Ban404/systemverilog-waveform-debug-skill.git \
+  .codex/skills/systemverilog-waveform-debug-skill
 git submodule update --init --recursive
 ```
 
 SSH works as well:
 
 ```bash
-git submodule add git@github.com:L1Ban404/sv-waveform-debug.git \
-  .codex/skills/sv-waveform-debug
+git submodule add git@github.com:L1Ban404/systemverilog-waveform-debug-skill.git \
+  .codex/skills/systemverilog-waveform-debug-skill
 git submodule update --init --recursive
 ```
 
 ## Quick start
 
 ```bash
-CLI=.codex/skills/sv-waveform-debug/scripts/wave_debug.py
+CLI=.codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py
 
 python "$CLI" doctor
 python "$CLI" inspect --json

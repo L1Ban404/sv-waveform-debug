@@ -98,7 +98,7 @@ def _doctor(as_json: bool) -> int:
         "remediation": [],
     }
     if not engine:
-        result["remediation"].append("git submodule update --init --recursive .codex/skills/sv-waveform-debug")
+        result["remediation"].append("git submodule update --init --recursive .codex/skills/systemverilog-waveform-debug-skill")
     if not pywellen and shutil.which("fst2vcd") is None:
         result["remediation"].append("install a compatible pywellen or fst2vcd to read FST waveforms")
     if as_json:

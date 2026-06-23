@@ -1,4 +1,4 @@
 interface:
   display_name: "SystemVerilog Waveform Debug"
   short_description: "Investigate RTL failures from FST/VCD evidence"
-  default_prompt: "Use $sv-waveform-debug to investigate this hardware failure from waveform evidence and RTL source."
+  default_prompt: "Use $systemverilog-waveform-debug-skill to investigate this hardware failure from waveform evidence and RTL source."

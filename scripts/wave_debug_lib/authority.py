@@ -14,7 +14,7 @@ def engine_root(skill_root: Path) -> Path:
     if not (path / "scripts/hw_debug_cli.py").is_file():
         raise RuntimeError(
             "waveform engine is missing; run `git submodule update --init --recursive "
-            ".codex/skills/sv-waveform-debug`"
+            ".codex/skills/systemverilog-waveform-debug-skill`"
         )
     return path
 

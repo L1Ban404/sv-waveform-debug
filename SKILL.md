@@ -1,9 +1,9 @@
 ---
-name: sv-waveform-debug
+name: systemverilog-waveform-debug-skill
 description: Investigate and explain Verilog or SystemVerilog failures from FST/VCD waveform evidence and HDL source. Use for simulation failures, assertion violations, protocol bugs, pipeline stalls, FSM errors, data/control mismatches, X/Z propagation, reset/clock problems, or requests to find and optionally fix an RTL root cause. Discover scopes and signals, compare good and bad traces, query bounded time windows, map waveform paths to RTL, test causal hypotheses, and support waveform-only triage when source is unavailable.
 ---
 
-# SystemVerilog Waveform Debug
+# SystemVerilog Waveform Debug Skill
 
 Work from observable behavior toward the earliest causal RTL transition. Keep facts, interpretations, and hypotheses separate.
 
@@ -12,8 +12,8 @@ Work from observable behavior toward the earliest causal RTL transition. Keep fa
 Run from the HDL workspace root. Check capabilities, then inspect inputs:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py doctor
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py inspect --json
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py doctor
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py inspect --json
 ```
 
 Pass `--waveform`, `--source-root`, `--filelist`, and `--top` when discovery is ambiguous. Never silently choose among multiple plausible tops or traces.
@@ -24,15 +24,15 @@ Pass `--waveform`, `--source-root`, `--filelist`, and `--top` when discovery is 
 2. Discover paths instead of guessing them:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py scopes --json
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py signals \
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py scopes --json
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py signals \
   --scope tb.dut --match valid --limit 40 --json
 ```
 
 3. Probe a small window and a falsifiable set of signals:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py probe \
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py probe \
   --around 420ns --radius 30ns --scope tb.dut \
   --match ready --signal tb.dut.clk --clock tb.dut.clk
 ```
@@ -42,14 +42,14 @@ Use `--start/--end` for explicit windows and `--max-signals`/`--max-changes` to 
 4. When a known-good trace exists, locate the earliest divergence before reading downstream symptoms:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py compare good.vcd bad.vcd \
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py compare good.vcd bad.vcd \
   --scope tb.dut --match state
 ```
 
 5. Build RTL authority only when source mapping is needed:
 
 ```bash
-python .codex/skills/sv-waveform-debug/scripts/wave_debug.py authority \
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py authority \
   --waveform bad.fst --filelist sim/files.f --top tb_top
 ```
 
