@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/L1Ban404/systemverilog-waveform-debug-skill/schemas/debug_case.schema.json",
+  "title": "Immutable waveform debug case",
+  "type": "object",
+  "required": ["schema_version", "case_id", "revision", "provenance", "symptom", "hypotheses", "validation_history"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "case_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 0},
+    "provenance": {"type": "object", "required": ["schema_version", "waveform"]},
+    "symptom": {"$ref": "#/$defs/symptom"},
+    "hypotheses": {"type": "array", "items": {"$ref": "#/$defs/hypothesis"}},
+    "validation_history": {"type": "array", "items": {"type": "object"}}
+  },
+  "$defs": {
+    "bits": {"type": "string", "pattern": "^[01xXzZ]+$"},
+    "symptom": {
+      "type": "object",
+      "required": ["summary", "time_window", "affected_signals", "first_divergence"],
+      "properties": {
+        "summary": {"type": "string"},
+        "time_window": {"type": ["object", "null"]},
+        "affected_signals": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "first_divergence": {"type": ["string", "null"]}
+      }
+    },
+    "event": {
+      "oneOf": [
+        {"type": "object", "required": ["kind", "signal", "equals"], "properties": {"kind": {"const": "value"}, "signal": {"type": "string"}, "equals": {"$ref": "#/$defs/bits"}}},
+        {"type": "object", "required": ["kind", "signal", "edge"], "properties": {"kind": {"const": "edge"}, "signal": {"type": "string"}, "edge": {"enum": ["rising", "falling", "both"]}}}
+      ]
+    },
+    "check": {
+      "oneOf": [
+        {"type": "object", "required": ["id", "kind", "signal", "time", "equals"], "properties": {"kind": {"const": "value_at"}, "equals": {"$ref": "#/$defs/bits"}}},
+        {"type": "object", "required": ["id", "kind", "signal", "start", "end"], "properties": {"kind": {"const": "stable"}, "equals": {"$ref": "#/$defs/bits"}}},
+        {"type": "object", "required": ["id", "kind", "signal", "start", "end", "from", "to"], "properties": {"kind": {"const": "transition"}, "from": {"$ref": "#/$defs/bits"}, "to": {"$ref": "#/$defs/bits"}}},
+        {"type": "object", "required": ["id", "kind", "signal", "start", "end", "edge"], "properties": {"kind": {"const": "edge"}, "edge": {"enum": ["rising", "falling", "both"]}}},
+        {"type": "object", "required": ["id", "kind", "start", "end", "first", "second"], "properties": {"kind": {"const": "occurs_before"}, "first": {"$ref": "#/$defs/event"}, "second": {"$ref": "#/$defs/event"}}}
+      ]
+    },
+    "hypothesis": {
+      "type": "object",
+      "required": ["id", "description", "required_signals", "expected_checks", "falsification_checks", "confidence", "status"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "description": {"type": "string"},
+        "required_signals": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "expected_checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+        "falsification_checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+        "confidence": {"enum": ["low", "medium", "high", "unknown"]},
+        "status": {"enum": ["active", "supported", "contradicted", "insufficient-evidence"]}
+      }
+    }
+  },
+  "additionalProperties": true
+}

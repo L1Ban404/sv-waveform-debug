@@ -11,9 +11,12 @@ from typing import Any
 from . import SCHEMA_VERSION, TOOL_VERSION
 from .analysis import cache_key, compare_waveforms, infer_roles, probe, select_signals, signal_value, suggest_paths
 from .authority import authority_diagnostics, authority_fingerprint, build_authority
+from .case import (
+    build_case, ensure_case_waveform, read_case, validate_case_hypotheses, write_case,
+)
 from .project import SourceManifest, infer_top, module_candidates, resolve_waveform, source_manifest, waveform_candidates
 from .provenance import build_provenance, read_provenance, write_provenance
-from .report import write_probe_report
+from .report import write_case_report, write_probe_report
 from .vcd import parse_time
 from .wave import open_waveform, pywellen_diagnostics
 
@@ -475,6 +478,96 @@ def _provenance(args: argparse.Namespace) -> int:
     return 0
 
 
+def _case_init(args: argparse.Namespace) -> int:
+    if args.waveform is None:
+        raise ValueError("case init requires an explicit --waveform")
+    workspace, waveform, output, _ = _paths(args)
+    wave = open_waveform(waveform, skill_root(), output)
+    if (args.symptom_start is None) != (args.symptom_end is None):
+        raise ValueError("--symptom-start and --symptom-end must be supplied together")
+    if args.symptom_start is not None:
+        start = parse_time(args.symptom_start, wave.header.timescale)
+        end = parse_time(args.symptom_end, wave.header.timescale)
+        if end < start:
+            raise ValueError("symptom window end must not precede start")
+    missing = [path for path in args.affected_signal if path not in {signal.path for signal in wave.header.signals}]
+    if missing:
+        raise ValueError(f"affected signals must be exact waveform paths: {missing[0]}")
+    manifest = _manifest(args, workspace)
+    top, _ = _top(args, manifest, wave, waveform, False)
+    run_provenance = _run_provenance(args, wave, manifest, top)
+    provided = run_provenance["provided"]
+    if provided is not None and not provided["waveform_matches_current"]:
+        raise ValueError("provided provenance manifest does not match --waveform")
+    case = build_case(
+        args.case_id or waveform.stem, run_provenance["current"], args.symptom,
+        args.symptom_start, args.symptom_end, args.affected_signal, args.first_divergence,
+    )
+    destination = args.out or output / "cases" / str(case["case_id"]) / "case.json"
+    destination = destination if destination.is_absolute() else workspace / destination
+    if destination.exists() and not args.force:
+        raise ValueError(f"case already exists: {destination}; pass --force to replace it")
+    write_case(destination, case)
+    print(destination)
+    return 0
+
+
+def _provenance_fingerprint(provenance: dict[str, object]) -> str:
+    return hashlib.sha256(json.dumps(provenance, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _case_validate(args: argparse.Namespace) -> int:
+    workspace = args.workspace.resolve()
+    case_path = args.case if args.case.is_absolute() else workspace / args.case
+    case_path = case_path.resolve()
+    case_root = case_path.parent.parent if case_path.parent.name == "revisions" else case_path.parent
+    case = read_case(case_path)
+    waveform_path = ensure_case_waveform(case)
+    output = args.out_dir or case_path.parent / "build"
+    output = output if output.is_absolute() else workspace / output
+    wave = open_waveform(waveform_path, skill_root(), output)
+    if not case["hypotheses"]:
+        raise ValueError("case has no hypotheses; add one before validation")
+    selected_ids = set(args.hypothesis) if args.hypothesis else None
+    authority_db = args.authority_db
+    if authority_db is not None and not authority_db.is_absolute():
+        authority_db = workspace / authority_db
+    revision, packets = validate_case_hypotheses(case, wave, authority_db, args.max_changes, selected_ids)
+    validation = revision["validation_history"][-1]
+    validation["command"] = "wave_debug.py case validate"
+    validation["input_case"] = str(case_path)
+    validation["provenance_fingerprint"] = _provenance_fingerprint(case["provenance"])
+    destination = args.out
+    if destination is None:
+        destination = case_root / "revisions" / f"revision_{revision['revision']:03d}.json"
+    destination = destination if destination.is_absolute() else workspace / destination
+    if destination.exists():
+        raise ValueError(f"validation snapshot already exists: {destination}")
+    evidence_dir = case_root / "evidence" / f"revision_{revision['revision']:03d}"
+    paths: dict[str, str] = {}
+    for key, packet in packets.items():
+        packet["provenance_fingerprint"] = validation["provenance_fingerprint"]
+        packet["authority"] = authority_fingerprint(authority_db)
+        evidence_path = evidence_dir / f"{key}.json"
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_path.write_text(_json(packet), encoding="utf-8")
+        paths[key] = str(evidence_path)
+    for result in validation["results"]:
+        result["evidence"] = [
+            paths[f"{result['hypothesis_id']}__{check['check_id']}"]
+            for check in result["checks"]
+            if f"{result['hypothesis_id']}__{check['check_id']}" in paths
+        ]
+    write_case(destination, revision)
+    if args.report:
+        report = args.report if args.report.is_absolute() else workspace / args.report
+        write_case_report(report, revision, validation, validation["command"])
+        validation["report"] = str(report)
+        write_case(destination, revision)
+    print(destination)
+    return 0
+
+
 def _compare(args: argparse.Namespace) -> int:
     workspace = args.workspace.resolve()
     output = args.out_dir or workspace / "build/wave-debug"
@@ -555,6 +648,28 @@ def build_parser() -> argparse.ArgumentParser:
     _add_wave_inputs(provenance)
     _add_source_inputs(provenance)
     provenance.add_argument("--out", type=Path, help="manifest destination (default: build/wave-debug/provenance.json)")
+    case = sub.add_parser("case", help="create and validate immutable waveform-debug cases")
+    case_sub = case.add_subparsers(dest="case_command", required=True)
+    case_init = case_sub.add_parser("init", help="create an editable debug case from an explicit waveform")
+    _add_wave_inputs(case_init)
+    _add_source_inputs(case_init)
+    case_init.add_argument("--case-id")
+    case_init.add_argument("--out", type=Path, help="case destination (default: build/wave-debug/cases/<id>/case.json)")
+    case_init.add_argument("--force", action="store_true", help="replace an existing output case")
+    case_init.add_argument("--symptom", help="human-authored failure summary")
+    case_init.add_argument("--symptom-start", help="optional symptom window start")
+    case_init.add_argument("--symptom-end", help="optional symptom window end")
+    case_init.add_argument("--affected-signal", action="append", default=[], help="exact waveform path affected by the symptom")
+    case_init.add_argument("--first-divergence", help="optional reference to a compare result")
+    case_validate = case_sub.add_parser("validate", help="validate case hypotheses and write a new revision")
+    case_validate.add_argument("--case", type=Path, required=True)
+    case_validate.add_argument("--workspace", type=Path, default=Path.cwd())
+    case_validate.add_argument("--out-dir", type=Path)
+    case_validate.add_argument("--out", type=Path, help="validation snapshot destination")
+    case_validate.add_argument("--hypothesis", action="append", default=[], help="hypothesis id to validate (default: all)")
+    case_validate.add_argument("--authority-db", type=Path)
+    case_validate.add_argument("--max-changes", type=int, default=200)
+    case_validate.add_argument("--report", type=Path, help="write a Markdown validation report")
     signal = sub.add_parser("signal", help="query one signal at a timestamp")
     _add_wave_inputs(signal)
     signal.add_argument("--signal", required=True, dest="signal_path")
@@ -597,6 +712,11 @@ def main(argv: list[str] | None = None) -> int:
             return _authority(args)
         if args.command == "provenance":
             return _provenance(args)
+        if args.command == "case":
+            if args.case_command == "init":
+                return _case_init(args)
+            if args.case_command == "validate":
+                return _case_validate(args)
         if args.command == "signal":
             return _signal(args)
         if args.command == "probe":

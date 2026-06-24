@@ -16,6 +16,7 @@ Version 0.4 turns waveform analysis into an iterative investigation: discover hi
 - Verilog/SystemVerilog discovery plus `.f/.flist`, include, define, and exclude inputs
 - RTL hierarchy authority and source-navigation context
 - Portable simulation provenance manifests and reviewable Markdown evidence reports
+- Immutable debug cases with deterministic hypothesis validation and evidence packets
 - Bounded JSON evidence designed for an LLM context window
 
 The adapter is simulator- and architecture-independent.
@@ -67,6 +68,21 @@ python "$CLI" provenance --waveform <waveform-from-failing-run> \
 ```
 
 Use `compare --align reset-deassert --align-signal <path>` or `--align clock-edge --align-signal <path>` when traces do not share a time origin. Add `--report evidence.md --inference '...' --hypothesis '...'` to `probe` for a compact Markdown evidence report.
+
+## Debug cases
+
+Use a case when an investigation needs multiple explicit, falsifiable hypotheses. Initialization freezes waveform provenance but creates an editable JSON file; validation never rewrites it and instead writes a new revision plus one bounded evidence packet per check.
+
+```bash
+python "$CLI" case init --waveform <waveform-from-failing-run> \
+  --symptom '<observable failure>' --out build/wave-debug/cases/<case-id>/case.json
+
+# Add hypotheses to the generated JSON, then validate all or one selected id.
+python "$CLI" case validate --case build/wave-debug/cases/<case-id>/case.json \
+  --report build/wave-debug/case-report.md
+```
+
+The v0.5 predicate set is deliberately small: `value_at`, `stable`, `transition`, `edge`, and `occurs_before`. It accepts only exact elaborated paths and raw `0/1/x/z` bit strings. Results are `supported`, `contradicted`, or `insufficient-evidence`; the CLI does not generate, rank, or silently revise hypotheses. See [the case schema](schemas/debug_case.schema.json) for the JSON contract.
 
 Map selected activity back to RTL:
 

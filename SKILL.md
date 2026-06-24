@@ -30,6 +30,20 @@ python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py pr
   --out build/wave-debug/provenance.json
 ```
 
+For a multi-step investigation, create an immutable debug case. `case init` embeds the waveform provenance and creates an editable JSON template; it requires `--waveform` even if discovery would find only one candidate. Add exact elaborated signal paths and declarative hypotheses, then validate into a new revision without modifying the input case:
+
+```bash
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py case init \
+  --waveform <waveform-from-failing-run> --symptom '<observable failure>' \
+  --out build/wave-debug/cases/<case-id>/case.json
+
+# Edit hypotheses in case.json, then:
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py case validate \
+  --case build/wave-debug/cases/<case-id>/case.json --report build/wave-debug/case-report.md
+```
+
+The v0.5 case schema supports `value_at`, `stable`, `transition`, `edge`, and `occurs_before` checks. Store expected values as raw `0/1/x/z` bit strings and exact waveform paths; do not save fuzzy patterns or radix-rendered values. A validation is only `supported` when all expected checks pass and no falsifier triggers; it is `contradicted` when a falsifier triggers, otherwise `insufficient-evidence`. Read [schemas/debug_case.schema.json](schemas/debug_case.schema.json) for the machine-readable contract.
+
 ## Investigate iteratively
 
 1. Establish waveform provenance, timescale, clocks, resets, failure time, and the first incorrect externally visible signal.
@@ -96,6 +110,8 @@ python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py pr
 ```
 
 The report keeps Observed evidence separate from user-supplied Inferred and Hypothesis statements.
+
+Do not ask the CLI to invent, score, or expand hypotheses in v0.5. Human or LLM reasoning may author them, but the tool only validates bounded waveform evidence and records the resulting revision.
 
 ## Diagnose and fix
 
