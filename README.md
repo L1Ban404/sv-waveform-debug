@@ -50,6 +50,100 @@ python "$CLI" probe --around 420ns --radius 30ns \
   --format table --view snapshots
 ```
 
+## Recommended debug flow
+
+Treat a debug session as an evidence chain, not as a search for a plausible RTL explanation. The normal order is **confirm the failing waveform → observe → infer → state a falsifiable hypothesis → validate → reproduce after the fix**.
+
+```mermaid
+flowchart TD
+    A[Select waveform] --> B{Known to be the failing run?}
+    B -->|yes| C[Mark confirmed failure]
+    B -->|no or uncertain| D[Run reproduce with explicit command]
+    D --> E{Failure and one waveform identified?}
+    E -->|yes| C
+    E -->|no| F[Specify waveform or failure time and rerun]
+    F --> D
+    C --> G[inspect then scopes then signals]
+    G --> H[Small probe window and waveform facts]
+    H --> I{Need source context?}
+    I -->|yes| J[authority with simulation context]
+    I -->|no| K[Write falsifiable hypothesis]
+    J --> K
+    K --> L[case init and case validate]
+    L --> M{Validation result}
+    M -->|supported| N[Apply authorized fix]
+    M -->|contradicted| O[Revise hypothesis]
+    M -->|insufficient evidence| P[Collect the smallest missing evidence]
+    O --> H
+    P --> H
+    N --> Q[reproduce the relevant test after fix]
+    Q --> R{Confirmed passing and checks clean?}
+    R -->|yes| S[case verify-fix: fixed]
+    R -->|no| T[not-fixed or verification-incomplete]
+    T --> H
+```
+
+The diagram is deliberately strict: an unconfirmed waveform is still usable for exploratory `probe`, `scopes`, and `signals`, but it cannot support a “current failure” conclusion, `case init`, or fix verification.
+
+1. **Get the right waveform and record its status.** If the current waveform is already known to come from the failing run, analyse it directly and pass `--confirm-failure` when creating a case. If that relationship is uncertain, re-run the failure first with an explicit command:
+
+   ```bash
+   python "$CLI" reproduce --run-command '<simulation command>' \
+     --testcase '<testcase-if-applicable>' --results <results-xml> \
+     --waveform <expected-waveform-output> --out build/wave-debug/runs/<run-id>/manifest.json
+   ```
+
+   A non-zero simulation exit status or a JUnit failure records `confirmed-failure`. When no waveform path is supplied, `reproduce` accepts only one newly created or modified waveform; otherwise it stops and asks for an explicit path. A time parsed from failure text is only a candidate—supply `--failure-time` if you want it recorded as the single failure time.
+
+2. **Discover actual elaborated names before probing.** Start from the selected waveform and inspect the compact summary, then enumerate scopes and signals. Use the exact returned paths in later commands.
+
+   ```bash
+   python "$CLI" inspect --waveform <failing-waveform> --provenance-file <manifest> --json
+   python "$CLI" scopes --waveform <failing-waveform> --json
+   python "$CLI" signals --waveform <failing-waveform> --scope <actual-scope> --match <local-name-fragment> --json
+   ```
+
+   Use `inspect --verbose` only when the complete source and provenance records are needed. Do not guess a top-level instance name, generated path, or packed/array expansion.
+
+3. **Collect a small window of waveform facts.** If the manifest has one confirmed failure time, use `--around-failure`; otherwise choose an explicit, narrow `--around` window. Prefer a clock snapshot view when following sequential logic.
+
+   ```bash
+   python "$CLI" probe --waveform <failing-waveform> --provenance-file <manifest> \
+     --around-failure --radius <small-window> --scope <actual-scope> \
+     --clock <actual-clock-path> --format table --view snapshots
+   ```
+
+   Record observations separately from interpretation: `Observed` is what the waveform contains; `Inferred` is an explanation; `Hypothesis` is a statement that can be disproved. Offline waveforms are `waveform-observed` only and cannot establish Active/NBA/Postponed ordering.
+
+4. **Map to RTL only when source context is needed.** Build authority using the same filelist, include paths, defines, parameters, or provenance as the simulation. Treat `elaborated-exact`, `static-candidate`, and `heuristic-context` as mapping confidence, not root-cause conclusions.
+
+   ```bash
+   python "$CLI" authority --waveform <failing-waveform> \
+     --filelist <simulation-filelist> --top <simulation-top>
+   ```
+
+5. **Turn an investigation into an auditable case.** Create a case only from a confirmed failing waveform, edit the generated hypotheses to use exact paths and limited predicates, then validate them. Validation writes revisions and evidence; it never rewrites the original case or invents a hypothesis.
+
+   ```bash
+   python "$CLI" case init --waveform <failing-waveform> --provenance-file <manifest> \
+     --symptom '<externally observable failure>' --out build/wave-debug/cases/<case-id>/case.json
+   python "$CLI" case validate --case build/wave-debug/cases/<case-id>/case.json \
+     --report build/wave-debug/case-report.md
+   ```
+
+6. **Fix, then close the loop with a passing reproduction.** Run the same relevant test explicitly after the authorized code change. An existing test that failed before the change and passes after it is a valid regression; add a test only when coverage is missing. Finally, verify the original case against the confirmed-passing run:
+
+   ```bash
+   python "$CLI" reproduce --run-command '<simulation command after fix>' \
+     --testcase '<testcase-if-applicable>' --results <results-xml> \
+     --waveform <fixed-waveform> --out build/wave-debug/runs/<fixed-run-id>/manifest.json
+   python "$CLI" case verify-fix --case <failing-case-or-revision> \
+     --waveform <fixed-waveform> --verification-manifest build/wave-debug/runs/<fixed-run-id>/manifest.json \
+     --outcome fixed --report build/wave-debug/fix-report.md
+   ```
+
+   `case verify-fix` reports `fixed` only when the verification run is confirmed passing, JUnit has no failures, and the original case checks no longer trigger a falsifier. Otherwise it reports `not-fixed` or `verification-incomplete` rather than declaring success.
+
 Waveform auto-discovery is deliberately conservative: if more than one `.fst` or `.vcd` exists, `inspect` lists paths, sizes, and UTC modification times but does not select one. Other waveform-reading commands require `--waveform PATH` in that case. Re-run the failure first; never assume a pre-existing waveform belongs to that run.
 
 Use `inspect --verbose` only when you need full source/provenance records; the default JSON is intentionally a compact waveform, hierarchy, role, and confirmation summary.
