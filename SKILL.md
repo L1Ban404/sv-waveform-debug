@@ -18,6 +18,8 @@ python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py in
 
 Pass `--waveform` when more than one trace exists. `inspect` will list every candidate with its UTC modification time and require an explicit choice; all waveform-reading commands likewise reject an ambiguous choice. Re-run the failing test first and use the waveform it just wrote—do not assume a pre-existing waveform belongs to the failure.
 
+If a user has already established that an explicit waveform is the failing run, analyze it directly. Before creating a case, asserting a root-cause conclusion, or verifying a fix, record that fact with `--confirm-failure` or use a matching manifest whose failure relation is `confirmed-failure`. Otherwise state that the trace is analyzable but unconfirmed and recommend reproduction.
+
 `--top` is a source/elaboration option for `inspect`, `probe`, `packet`, and `authority`; `scopes` and `signals` intentionally do **not** accept it because they inspect the waveform's actual elaborated hierarchy. Use them first to discover `dut`/`u_dut`, generate, array, and struct paths.
 
 Capture provenance when a failure is produced. The manifest is framework-neutral and records waveform identity/timescale, simulator details, sources, filelists, includes, defines, parameter overrides, command, and optional failure locator:
@@ -30,11 +32,21 @@ python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py pr
   --out build/wave-debug/provenance.json
 ```
 
+Prefer the explicit reproduction workflow when a simulation command is available. It never guesses a build command; it runs only the command supplied by the user, captures output/JUnit evidence, and requires an explicit waveform path if the run updates more than one candidate:
+
+```bash
+python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py reproduce \
+  --run-command '<simulation command>' --waveform <expected-waveform-output> \
+  --results <results-xml> --out build/wave-debug/runs/<run-id>/manifest.json
+```
+
+Use `probe --around-failure --provenance-file <run-manifest>` only when the manifest is a confirmed failure with an explicit failure time. JUnit failure text may produce time candidates, but do not choose among them automatically; pass `--failure-time` during reproduction or use `--around`.
+
 For a multi-step investigation, create an immutable debug case. `case init` embeds the waveform provenance and creates an editable JSON template; it requires `--waveform` even if discovery would find only one candidate. Add exact elaborated signal paths and declarative hypotheses, then validate into a new revision without modifying the input case:
 
 ```bash
 python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py case init \
-  --waveform <waveform-from-failing-run> --symptom '<observable failure>' \
+  --waveform <waveform-from-failing-run> --confirm-failure --symptom '<observable failure>' \
   --out build/wave-debug/cases/<case-id>/case.json
 
 # Edit hypotheses in case.json, then:
@@ -42,7 +54,7 @@ python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py ca
   --case build/wave-debug/cases/<case-id>/case.json --report build/wave-debug/case-report.md
 ```
 
-The v0.5 case schema supports `value_at`, `stable`, `transition`, `edge`, and `occurs_before` checks. Store expected values as raw `0/1/x/z` bit strings and exact waveform paths; do not save fuzzy patterns or radix-rendered values. A validation is only `supported` when all expected checks pass and no falsifier triggers; it is `contradicted` when a falsifier triggers, otherwise `insufficient-evidence`. Read [schemas/debug_case.schema.json](schemas/debug_case.schema.json) for the machine-readable contract.
+The debug-case `1.0` schema supports `value_at`, `stable`, `transition`, `edge`, and `occurs_before` checks. Store expected values as raw `0/1/x/z` bit strings and exact waveform paths; do not save fuzzy patterns or radix-rendered values. A validation is only `supported` when all expected checks pass and no falsifier triggers; it is `contradicted` when a falsifier triggers, otherwise `insufficient-evidence`. Read [schemas/debug_case.schema.json](schemas/debug_case.schema.json) for the machine-readable contract.
 
 ## Investigate iteratively
 
@@ -111,7 +123,11 @@ python .codex/skills/systemverilog-waveform-debug-skill/scripts/wave_debug.py pr
 
 The report keeps Observed evidence separate from user-supplied Inferred and Hypothesis statements.
 
-Do not ask the CLI to invent, score, or expand hypotheses in v0.5. Human or LLM reasoning may author them, but the tool only validates bounded waveform evidence and records the resulting revision.
+For an authorized fix, an existing test that reproduces the behavior before the change and passes after it is a valid regression. Add a new test only when that behavior is not already covered. Verify the fix with `case verify-fix --outcome fixed`; it reports `fixed` only for a confirmed-passing run with no JUnit failures and supported case checks.
+
+`inspect` is compact by default; use `--verbose` for complete source paths and embedded provenance. Tool version `0.6.0` is distinct from the waveform/authority `0.4`, provenance `1.0`, and debug-case `1.0` contracts. Read `doctor --json` for the version registry.
+
+Do not ask the CLI to invent, score, or expand hypotheses. Human or LLM reasoning may author them, but the tool only validates bounded waveform evidence and records the resulting revision.
 
 ## Diagnose and fix
 

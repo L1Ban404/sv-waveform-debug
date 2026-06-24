@@ -39,7 +39,7 @@ class CaseTests(unittest.TestCase):
         invoke(
             "case", "init", "--workspace", str(root), "--waveform", "wave.vcd", "--out", str(case_path),
             "--symptom", "observable mismatch", "--symptom-start", "0ns", "--symptom-end", "20ns",
-            "--affected-signal", "top_tb.u_dut.valid_o",
+            "--affected-signal", "top_tb.u_dut.valid_o", "--confirm-failure",
         )
         return case_path
 

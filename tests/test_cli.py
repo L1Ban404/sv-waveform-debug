@@ -31,6 +31,7 @@ class CliTests(unittest.TestCase):
         self.assertIn(direct["source"], {"bundled", "installed", None})
         self.assertIn("soabi", direct["runtime"])
         authority = result["capabilities"]["rtl_authority"]
+        self.assertEqual(result["version_registry"]["tool"], "0.6.0")
         self.assertEqual(authority["default_backend"], "auto")
         self.assertEqual(authority["backends"]["static"]["match_status"], "static-source-match")
         self.assertFalse(authority["backends"]["static"]["exact"])
@@ -149,14 +150,17 @@ class CliTests(unittest.TestCase):
             self.assertEqual(provenance["compilation"]["parameter_overrides"], ["WIDTH=8"])
             inspected = json.loads(invoke(
                 "inspect", "--workspace", str(ROOT / "tests/fixtures"), "--waveform", str(FIXTURE),
-                "--provenance-file", str(manifest), "--json",
+                "--provenance-file", str(manifest), "--json", "--verbose",
             ).stdout)
-            self.assertTrue(inspected["provenance"]["provided"]["waveform_matches_current"])
-            authority_dir = Path(invoke(
+            self.assertTrue(inspected["provenance_detail"]["provided"]["waveform_matches_current"])
+            authority = json.loads(invoke(
                 "authority", "--workspace", str(ROOT / "tests/fixtures"), "--waveform", str(FIXTURE),
-                "--provenance-file", str(manifest), "--authority-backend", "static", "--out-dir", str(root / "authority"),
-            ).stdout.strip())
+                "--provenance-file", str(manifest), "--authority-backend", "static", "--out-dir", str(root / "authority"), "--json",
+            ).stdout)
+            authority_dir = Path(authority["destination"])
             self.assertTrue((authority_dir / "rtl_authority.sqlite3").is_file())
+            self.assertGreater(authority["mapping_count"], 0)
+            self.assertTrue(authority["mappings"])
             direct = json.loads(invoke(
                 "signals", "--workspace", str(ROOT / "tests/fixtures"), "--waveform", str(FIXTURE),
                 "--scope", "top_tb", "--no-recursive", "--path-regex", r"^top_tb\.", "--json",

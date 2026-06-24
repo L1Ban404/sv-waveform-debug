@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -10,13 +11,14 @@ from typing import Any
 
 from . import SCHEMA_VERSION, TOOL_VERSION
 from .analysis import cache_key, compare_waveforms, infer_roles, probe, select_signals, signal_value, suggest_paths
-from .authority import authority_diagnostics, authority_fingerprint, build_authority
+from .authority import authority_diagnostics, authority_fingerprint, build_authority, lookup_authority
 from .case import (
     build_case, ensure_case_waveform, read_case, validate_case_hypotheses, write_case,
 )
 from .project import SourceManifest, infer_top, module_candidates, resolve_waveform, source_manifest, waveform_candidates
 from .provenance import build_provenance, read_provenance, write_provenance
-from .report import write_case_report, write_probe_report
+from .reproduce import run_record, waveform_snapshot, write_run_record
+from .report import write_case_report, write_fix_report, write_probe_report
 from .vcd import parse_time
 from .wave import open_waveform, pywellen_diagnostics
 
@@ -26,6 +28,10 @@ def skill_root() -> Path:
 
 
 def _json(value: object) -> str:
+    if isinstance(value, dict):
+        value = dict(value)
+        value.setdefault("tool_version", TOOL_VERSION)
+        value.setdefault("contract_schema", value.get("schema_version"))
     return json.dumps(value, indent=2, sort_keys=True) + "\n"
 
 
@@ -49,6 +55,7 @@ def _add_source_inputs(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--simulation-command", help="reproducible simulation command recorded in provenance")
     parser.add_argument("--failure-time", help="failure time recorded in provenance")
     parser.add_argument("--failure-label", help="assertion, testcase, or external failure label")
+    parser.add_argument("--confirm-failure", action="store_true", help="explicitly confirm this waveform belongs to a failing run")
     parser.add_argument("--provenance-file", type=Path, help="read a previously generated provenance manifest")
 
 
@@ -150,6 +157,7 @@ def _authority_db(args: argparse.Namespace, workspace: Path, output: Path, top: 
 
 
 def _run_provenance(args: argparse.Namespace, wave: Any, manifest: SourceManifest, top: str | None) -> dict[str, object]:
+    relation = "confirmed-failure" if getattr(args, "confirm_failure", False) else "unknown"
     current = build_provenance(
         wave, manifest, top,
         simulator=getattr(args, "simulator", None),
@@ -158,12 +166,19 @@ def _run_provenance(args: argparse.Namespace, wave: Any, manifest: SourceManifes
         parameter_overrides=getattr(args, "parameter", []),
         failure_time=getattr(args, "failure_time", None),
         failure_label=getattr(args, "failure_label", None),
+        failure_relation=relation,
     )
     supplied_path = getattr(args, "provenance_file", None)
     if not supplied_path:
         return {"current": current, "provided": None}
     supplied = read_provenance(supplied_path)
     supplied_wave = str(supplied["waveform"].get("path", ""))
+    if not getattr(args, "confirm_failure", False):
+        current["failure"]["relation"] = supplied["failure"].get("relation", "unknown")
+        if current["failure"]["time"] is None:
+            current["failure"]["time"] = supplied["failure"].get("time")
+        if current["failure"]["label"] is None:
+            current["failure"]["label"] = supplied["failure"].get("label")
     return {
         "current": current,
         "provided": {
@@ -179,6 +194,10 @@ def _doctor(as_json: bool) -> int:
     pywellen = pywellen_diagnostics(root)
     result = {
         "schema_version": SCHEMA_VERSION,
+        "version_registry": {
+            "tool": TOOL_VERSION, "waveform_evidence": SCHEMA_VERSION,
+            "authority": SCHEMA_VERSION, "provenance": "1.0", "debug_case": "1.0",
+        },
         "python": {"version": sys.version.split()[0], "supported_vcd": sys.version_info >= (3, 10)},
         "capabilities": {
             "vcd": {"available": True, "backend": "python-vcd"},
@@ -215,7 +234,7 @@ def _inspect(args: argparse.Namespace) -> int:
             "waveform": {
                 "selected": None,
                 "selection": "explicit --waveform required: multiple candidates found",
-                "candidates": candidate_rows,
+                "candidates": candidate_rows if args.verbose else candidate_rows[:10],
             },
             "output_dir": str(output),
             "next_command": "rerun the failed test, then pass its new waveform with --waveform PATH",
@@ -231,6 +250,9 @@ def _inspect(args: argparse.Namespace) -> int:
     wave = open_waveform(waveform, skill_root(), output)
     manifest = _manifest(args, workspace)
     selected_top, top_candidates = _top(args, manifest, wave, waveform, False)
+    run_provenance = _run_provenance(args, wave, manifest, selected_top)
+    current_provenance = run_provenance["current"]
+    assert isinstance(current_provenance, dict)
     result = {
         "schema_version": SCHEMA_VERSION,
         "workspace": str(workspace),
@@ -239,23 +261,36 @@ def _inspect(args: argparse.Namespace) -> int:
             "selection": "explicit --waveform" if args.waveform else "only waveform candidate",
             "format": wave.format,
             "backend": wave.backend,
-            "candidates": candidate_rows,
+            "candidates": candidate_rows if args.verbose else candidate_rows[:1],
         },
         "timescale": wave.header.timescale.as_dict(),
         "hierarchy": {"scope_count": len(wave.header.scopes), "signal_count": len(wave.header.signals)},
         "source": {
             "files": len(manifest.files),
-            "filelists": [str(path) for path in manifest.filelists],
-            "include_dirs": [str(path) for path in manifest.include_dirs],
-            "defines": manifest.defines,
         },
         "top_candidates": top_candidates,
         "selected_top": selected_top,
         "top_selection": _top_selection(args, top_candidates, selected_top),
         "role_candidates": infer_roles(wave.header.signals),
-        "provenance": _run_provenance(args, wave, manifest, selected_top),
+        "suggested_scope": selected_top or next((scope.path for scope in wave.header.scopes if scope.parent is None), None),
+        "provenance": {
+            "failure_relation": current_provenance["failure"]["relation"],
+            "failure_time": current_provenance["failure"]["time"],
+            "provided_manifest": run_provenance["provided"] and {
+                "path": run_provenance["provided"]["path"],
+                "waveform_matches_current": run_provenance["provided"]["waveform_matches_current"],
+            },
+        },
         "output_dir": str(output),
     }
+    if args.verbose:
+        result["source"].update({
+            "filelists": [str(path) for path in manifest.filelists],
+            "include_dirs": [str(path) for path in manifest.include_dirs],
+            "defines": manifest.defines,
+            "source_files": [str(path) for path in manifest.files],
+        })
+        result["provenance_detail"] = run_provenance
     if args.json:
         print(_json(result), end="")
     else:
@@ -272,6 +307,8 @@ def _inspect(args: argparse.Namespace) -> int:
         print(f"top-candidates: {', '.join(top_candidates) if top_candidates else '<none>'}")
         print(f"selected-top: {selected_top or '<ambiguous>'}")
         print(f"top-selection: {result['top_selection']}")
+        print(f"suggested-scope: {result['suggested_scope'] or '<none>'}")
+        print(f"failure-relation: {result['provenance']['failure_relation']}")
         print(f"output-dir: {output}")
     return 0
 
@@ -363,8 +400,9 @@ def _signal(args: argparse.Namespace) -> int:
 def _probe(args: argparse.Namespace, save_packet: bool = False) -> int:
     workspace, waveform, output, _ = _paths(args)
     wave = open_waveform(waveform, skill_root(), output)
-    if args.around is not None:
-        around = parse_time(args.around, wave.header.timescale)
+    if args.around is not None or args.around_failure:
+        around_value = args.around if args.around is not None else _failure_time_from_manifest(args, workspace)
+        around = parse_time(around_value, wave.header.timescale)
         radius = parse_time(args.radius, wave.header.timescale)
         start, end = max(0, around - radius), around + radius
     else:
@@ -456,11 +494,37 @@ def _authority(args: argparse.Namespace) -> int:
     top, _ = _top(args, manifest, wave, waveform, True)
     assert top is not None
     destination = output / "authority" / top
-    build_authority(
+    backend = build_authority(
         manifest.files, top, destination, args.force, args.authority_backend,
         manifest.include_dirs, manifest.defines, args.parameter,
     )
-    print(destination)
+    authority = lookup_authority(destination / "rtl_authority.sqlite3", [signal.path for signal in wave.header.signals])
+    mappings = []
+    for signal in sorted(wave.header.signals, key=lambda item: item.path):
+        row = authority.get(signal.path)
+        if row is None:
+            continue
+        context = row.get("source_context") or []
+        first = context[0] if context else {}
+        mappings.append({
+            "waveform_path": signal.path, "source_file": row.get("source_file"),
+            "source_line": first.get("line"), "authority_tier": row.get("mapping_confidence"),
+        })
+        if len(mappings) >= args.summary_limit:
+            break
+    summary = {
+        "schema_version": SCHEMA_VERSION, "destination": str(destination), "top": top,
+        "backend": backend, "authority": authority_fingerprint(destination / "rtl_authority.sqlite3"),
+        "mapping_count": len({signal.path for signal in wave.header.signals if signal.path in authority}), "mappings": mappings,
+    }
+    if args.json:
+        print(_json(summary), end="")
+    else:
+        print(f"authority: {destination}")
+        print(f"top: {top}  backend: {backend}  mappings: {summary['mapping_count']}")
+        for row in mappings:
+            source = f"{row['source_file']}:{row['source_line']}" if row["source_line"] else str(row["source_file"] or "<unresolved>")
+            print(f"{row['waveform_path']} -> {source} [{row['authority_tier']}]")
     return 0
 
 
@@ -499,6 +563,12 @@ def _case_init(args: argparse.Namespace) -> int:
     provided = run_provenance["provided"]
     if provided is not None and not provided["waveform_matches_current"]:
         raise ValueError("provided provenance manifest does not match --waveform")
+    current_provenance = run_provenance["current"]
+    assert isinstance(current_provenance, dict)
+    if current_provenance["failure"]["relation"] != "confirmed-failure":
+        raise ValueError(
+            "case init requires a confirmed failing waveform; pass --confirm-failure or use a confirmed provenance manifest"
+        )
     case = build_case(
         args.case_id or waveform.stem, run_provenance["current"], args.symptom,
         args.symptom_start, args.symptom_end, args.affected_signal, args.first_divergence,
@@ -510,6 +580,62 @@ def _case_init(args: argparse.Namespace) -> int:
     write_case(destination, case)
     print(destination)
     return 0
+
+
+def _failure_time_from_manifest(args: argparse.Namespace, workspace: Path) -> str:
+    path = getattr(args, "provenance_file", None)
+    if path is None:
+        raise ValueError("--around-failure requires --provenance-file with a confirmed failure")
+    path = path if path.is_absolute() else workspace / path
+    payload = read_provenance(path)
+    failure = payload["failure"]
+    if failure.get("relation") != "confirmed-failure":
+        raise ValueError("--around-failure requires provenance relation confirmed-failure")
+    value = failure.get("time")
+    if not isinstance(value, str) or not value:
+        raise ValueError("confirmed failure has no single failure time; pass --around or --failure-time")
+    return value
+
+
+def _reproduce(args: argparse.Namespace) -> int:
+    workspace = args.workspace.resolve()
+    output_root = args.out_dir or workspace / "build/wave-debug"
+    output_root = output_root if output_root.is_absolute() else workspace / output_root
+    before = waveform_snapshot(workspace)
+    run_id = args.run_id or datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ")
+    run_dir = output_root / "runs" / run_id
+    expected = None
+    if args.waveform is not None:
+        expected = args.waveform if args.waveform.is_absolute() else workspace / args.waveform
+    results = None
+    if args.results is not None:
+        results = args.results if args.results.is_absolute() else workspace / args.results
+    record, exit_code, waveform = run_record(
+        args.run_command, workspace, run_dir, before, expected, results, args.testcase,
+        args.failure_time, args.failure_label, args.confirm_failure, args.confirm_passing,
+    )
+    manifest_path = args.out or run_dir / "manifest.json"
+    manifest_path = manifest_path if manifest_path.is_absolute() else workspace / manifest_path
+    if waveform is not None:
+        wave = open_waveform(waveform, skill_root(), output_root)
+        manifest = _manifest(args, workspace)
+        top, _ = _top(args, manifest, wave, waveform, False)
+        provenance = build_provenance(
+            wave, manifest, top, simulator=args.simulator, simulator_version=args.simulator_version,
+            simulation_command=args.run_command, parameter_overrides=args.parameter,
+            failure_time=record["failure"]["time"], failure_label=args.failure_label,
+            failure_relation=record["failure"]["relation"],
+        )
+        provenance["run"] = record["run"]
+        provenance["junit"] = record["junit"]
+        provenance["failure_time_candidates"] = record.get("junit", {}).get("failure_time_candidates", []) if record.get("junit") else []
+        write_provenance(manifest_path, provenance)
+    else:
+        record["schema_version"] = "run-1.0"
+        record["tool_version"] = TOOL_VERSION
+        write_run_record(manifest_path, record)
+    print(manifest_path)
+    return exit_code if exit_code else (0 if waveform is not None else 2)
 
 
 def _provenance_fingerprint(provenance: dict[str, object]) -> str:
@@ -568,6 +694,71 @@ def _case_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _case_verify_fix(args: argparse.Namespace) -> int:
+    workspace = args.workspace.resolve()
+    case_path = args.case if args.case.is_absolute() else workspace / args.case
+    case_path = case_path.resolve()
+    case_root = case_path.parent.parent if case_path.parent.name == "revisions" else case_path.parent
+    case = read_case(case_path)
+    if case["provenance"].get("failure", {}).get("relation") != "confirmed-failure":
+        raise ValueError("case verify-fix requires a case built from a confirmed failing waveform")
+    failing_waveform = ensure_case_waveform(case)
+    verification_path = args.verification_manifest if args.verification_manifest.is_absolute() else workspace / args.verification_manifest
+    manifest = read_provenance(verification_path.resolve())
+    fixed = args.waveform if args.waveform.is_absolute() else workspace / args.waveform
+    if not fixed.is_file():
+        raise ValueError(f"fixed waveform does not exist: {fixed}")
+    if Path(str(manifest["waveform"]["path"])).resolve() != fixed.resolve():
+        raise ValueError("verification manifest waveform does not match --waveform")
+    output = args.out_dir or case_root / "build"
+    output = output if output.is_absolute() else workspace / output
+    wave = open_waveform(fixed.resolve(), skill_root(), output)
+    authority_db = args.authority_db
+    if authority_db is not None and not authority_db.is_absolute():
+        authority_db = workspace / authority_db
+    after_case, packets = validate_case_hypotheses(case, wave, authority_db, args.max_changes)
+    after = after_case["validation_history"][-1]["results"]
+    run = manifest.get("run", {})
+    junit = manifest.get("junit")
+    confirmed_passing = manifest["failure"].get("relation") == "confirmed-passing"
+    junit_clean = junit is not None and int(junit.get("failure_count", 0)) == 0
+    checks_supported = bool(after) and all(item["status"] == "supported" for item in after)
+    if not confirmed_passing or not junit_clean:
+        outcome = "verification-incomplete"
+    elif checks_supported:
+        outcome = "fixed"
+    else:
+        outcome = "not-fixed"
+    before = case["validation_history"][-1]["results"] if case["validation_history"] else []
+    verification = {
+        "schema_version": "fix-verification-1.0", "tool_version": TOOL_VERSION,
+        "outcome_requested": args.outcome, "outcome": outcome,
+        "failing_waveform": str(failing_waveform), "fixed_waveform": str(fixed.resolve()),
+        "case": str(case_path), "verification_manifest": str(verification_path.resolve()),
+        "verification_run": run, "junit": junit, "before": before, "after": after,
+    }
+    destination = args.out or case_root / "fix-verifications" / "verification.json"
+    destination = destination if destination.is_absolute() else workspace / destination
+    if destination.exists():
+        raise ValueError(f"fix verification already exists: {destination}")
+    evidence_dir = destination.parent / "evidence"
+    paths: dict[str, str] = {}
+    for key, packet in packets.items():
+        packet["verification_manifest"] = str(verification_path.resolve())
+        packet_path = evidence_dir / f"{key}.json"
+        packet_path.parent.mkdir(parents=True, exist_ok=True)
+        packet_path.write_text(_json(packet), encoding="utf-8")
+        paths[key] = str(packet_path)
+    verification["evidence"] = paths
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(_json(verification), encoding="utf-8")
+    if args.report:
+        report = args.report if args.report.is_absolute() else workspace / args.report
+        write_fix_report(report, verification)
+    print(destination)
+    return 0 if outcome == "fixed" else 2
+
+
 def _compare(args: argparse.Namespace) -> int:
     workspace = args.workspace.resolve()
     output = args.out_dir or workspace / "build/wave-debug"
@@ -591,6 +782,7 @@ def _probe_parser(sub: Any, name: str, help_text: str, window_required: bool = T
     parser.add_argument("--authority-db", type=Path)
     window = parser.add_mutually_exclusive_group(required=window_required)
     window.add_argument("--around")
+    window.add_argument("--around-failure", action="store_true")
     window.add_argument("--start")
     parser.add_argument("--end")
     parser.add_argument("--radius", default="100")
@@ -628,6 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_wave_inputs(inspect)
     _add_source_inputs(inspect)
     inspect.add_argument("--json", action="store_true")
+    inspect.add_argument("--verbose", action="store_true", help="include complete source and provenance records")
     scopes = sub.add_parser("scopes", help="list waveform scopes")
     _add_wave_inputs(scopes)
     scopes.add_argument("--scope")
@@ -644,10 +837,21 @@ def build_parser() -> argparse.ArgumentParser:
     _add_source_inputs(authority)
     authority.add_argument("--force", action="store_true")
     authority.add_argument("--authority-backend", choices=("auto", "verilator", "static"), default="auto")
+    authority.add_argument("--summary-limit", type=int, default=8)
+    authority.add_argument("--json", action="store_true")
     provenance = sub.add_parser("provenance", help="write a portable waveform and simulation-context manifest")
     _add_wave_inputs(provenance)
     _add_source_inputs(provenance)
     provenance.add_argument("--out", type=Path, help="manifest destination (default: build/wave-debug/provenance.json)")
+    reproduce = sub.add_parser("reproduce", help="run an explicit simulation command and archive its evidence")
+    _add_wave_inputs(reproduce)
+    _add_source_inputs(reproduce)
+    reproduce.add_argument("--run-command", required=True, help="explicit shell command to run in the workspace")
+    reproduce.add_argument("--run-id", help="run output directory name")
+    reproduce.add_argument("--testcase", help="testcase identifier recorded with the run")
+    reproduce.add_argument("--results", type=Path, help="optional JUnit/XML results file produced by the command")
+    reproduce.add_argument("--confirm-passing", action="store_true", help="explicitly confirm a successful run when no JUnit result is available")
+    reproduce.add_argument("--out", type=Path, help="run manifest destination")
     case = sub.add_parser("case", help="create and validate immutable waveform-debug cases")
     case_sub = case.add_subparsers(dest="case_command", required=True)
     case_init = case_sub.add_parser("init", help="create an editable debug case from an explicit waveform")
@@ -670,6 +874,17 @@ def build_parser() -> argparse.ArgumentParser:
     case_validate.add_argument("--authority-db", type=Path)
     case_validate.add_argument("--max-changes", type=int, default=200)
     case_validate.add_argument("--report", type=Path, help="write a Markdown validation report")
+    case_verify = case_sub.add_parser("verify-fix", help="verify a fixed waveform against a failing case")
+    case_verify.add_argument("--case", type=Path, required=True)
+    case_verify.add_argument("--waveform", type=Path, required=True, help="explicit waveform from the verification run")
+    case_verify.add_argument("--verification-manifest", type=Path, required=True)
+    case_verify.add_argument("--outcome", choices=("fixed",), required=True)
+    case_verify.add_argument("--workspace", type=Path, default=Path.cwd())
+    case_verify.add_argument("--out-dir", type=Path)
+    case_verify.add_argument("--out", type=Path)
+    case_verify.add_argument("--authority-db", type=Path)
+    case_verify.add_argument("--max-changes", type=int, default=200)
+    case_verify.add_argument("--report", type=Path)
     signal = sub.add_parser("signal", help="query one signal at a timestamp")
     _add_wave_inputs(signal)
     signal.add_argument("--signal", required=True, dest="signal_path")
@@ -712,11 +927,15 @@ def main(argv: list[str] | None = None) -> int:
             return _authority(args)
         if args.command == "provenance":
             return _provenance(args)
+        if args.command == "reproduce":
+            return _reproduce(args)
         if args.command == "case":
             if args.case_command == "init":
                 return _case_init(args)
             if args.case_command == "validate":
                 return _case_validate(args)
+            if args.case_command == "verify-fix":
+                return _case_verify_fix(args)
         if args.command == "signal":
             return _signal(args)
         if args.command == "probe":
@@ -731,7 +950,7 @@ def main(argv: list[str] | None = None) -> int:
                 wave = open_waveform(waveform, skill_root(), output)
                 length = parse_time(args.window_len, wave.header.timescale)
                 args.start, args.end, args.around = str(args.window * length), str((args.window + 1) * length - 1), None
-            elif args.start is None and args.around is None:
+            elif args.start is None and args.around is None and not args.around_failure:
                 raise ValueError("packet requires --window/--window-len, --start/--end, or --around")
             elif args.start is not None and args.end is None:
                 raise ValueError("--start requires --end")

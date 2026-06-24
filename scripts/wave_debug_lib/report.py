@@ -81,3 +81,30 @@ def write_case_report(path: Path, case: dict[str, Any], validation: dict[str, An
     lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_fix_report(path: Path, verification: dict[str, Any]) -> None:
+    run = verification["verification_run"]
+    lines = [
+        "# Fix verification report", "", "## Provenance", "",
+        f"- Failing waveform: `{verification['failing_waveform']}`",
+        f"- Fixed waveform: `{verification['fixed_waveform']}`",
+        f"- Outcome: `{verification['outcome']}`",
+        f"- Verification command: `{run.get('command')}`",
+        f"- Exit code: `{run.get('exit_code')}`",
+        f"- Testcase: `{run.get('testcase')}`", "", "## Before", "",
+    ]
+    for row in verification.get("before", []):
+        lines.append(f"- `{row.get('hypothesis_id')}`: `{row.get('status')}`.")
+    lines.extend(["", "## After", ""])
+    for row in verification["after"]:
+        checks = "; ".join(f"{check['check_id']}: {check['status']}" for check in row["checks"])
+        lines.append(f"- `{row['hypothesis_id']}`: `{row['status']}` ({checks}).")
+    lines.extend(["", "## Verification", ""])
+    junit = verification.get("junit")
+    if junit is not None:
+        lines.append(f"- JUnit failures: `{junit.get('failure_count')}` of `{junit.get('testcase_count')}` testcase(s).")
+    lines.append(f"- Decision: `{verification['outcome']}`.")
+    lines.append("")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="utf-8")

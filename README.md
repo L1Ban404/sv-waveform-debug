@@ -4,7 +4,7 @@
 
 A Codex skill and portable CLI for evidence-driven Verilog/SystemVerilog debugging from VCD or FST waveforms.
 
-Version 0.4 turns waveform analysis into an iterative investigation: discover hierarchy and signals, query compact windows, compare good and bad traces, map activity to RTL ownership, test hypotheses, and close the loop with an authorized RTL fix and regression.
+Version 0.6 turns waveform analysis into an iterative investigation: discover hierarchy and signals, query compact windows, compare good and bad traces, map activity to RTL ownership, test hypotheses, and close the loop with an authorized RTL fix and regression.
 
 ## Capabilities
 
@@ -17,6 +17,7 @@ Version 0.4 turns waveform analysis into an iterative investigation: discover hi
 - RTL hierarchy authority and source-navigation context
 - Portable simulation provenance manifests and reviewable Markdown evidence reports
 - Immutable debug cases with deterministic hypothesis validation and evidence packets
+- Explicit reproduction runs, confirmed failure provenance, and fix verification reports
 - Bounded JSON evidence designed for an LLM context window
 
 The adapter is simulator- and architecture-independent.
@@ -51,6 +52,8 @@ python "$CLI" probe --around 420ns --radius 30ns \
 
 Waveform auto-discovery is deliberately conservative: if more than one `.fst` or `.vcd` exists, `inspect` lists paths, sizes, and UTC modification times but does not select one. Other waveform-reading commands require `--waveform PATH` in that case. Re-run the failure first; never assume a pre-existing waveform belongs to that run.
 
+Use `inspect --verbose` only when you need full source/provenance records; the default JSON is intentionally a compact waveform, hierarchy, role, and confirmation summary.
+
 `--match` is a case-insensitive literal substring and repeated terms are ANDed. To match local-name alternatives, use `--name-regex '<alternative-1>|<alternative-2>'`; use `--path-regex` for full paths. Empty `scopes` and `signals` results include fuzzy hierarchy suggestions. `--top` is accepted by source/elaboration commands (`inspect`, `probe`, `packet`, `authority`), not `scopes` or `signals`, which always expose the waveform's real elaborated paths.
 
 `probe --clock ...` returns waveform-observed clock-edge snapshots in JSON; `--format table --view snapshots` makes those rows directly readable. All timestamps in a probe use the waveform's declared timescale unit.
@@ -75,14 +78,36 @@ Use a case when an investigation needs multiple explicit, falsifiable hypotheses
 
 ```bash
 python "$CLI" case init --waveform <waveform-from-failing-run> \
-  --symptom '<observable failure>' --out build/wave-debug/cases/<case-id>/case.json
+  --confirm-failure --symptom '<observable failure>' --out build/wave-debug/cases/<case-id>/case.json
 
 # Add hypotheses to the generated JSON, then validate all or one selected id.
 python "$CLI" case validate --case build/wave-debug/cases/<case-id>/case.json \
   --report build/wave-debug/case-report.md
 ```
 
-The v0.5 predicate set is deliberately small: `value_at`, `stable`, `transition`, `edge`, and `occurs_before`. It accepts only exact elaborated paths and raw `0/1/x/z` bit strings. Results are `supported`, `contradicted`, or `insufficient-evidence`; the CLI does not generate, rank, or silently revise hypotheses. See [the case schema](schemas/debug_case.schema.json) for the JSON contract.
+The debug-case `1.0` predicate set is deliberately small: `value_at`, `stable`, `transition`, `edge`, and `occurs_before`. It accepts only exact elaborated paths and raw `0/1/x/z` bit strings. Results are `supported`, `contradicted`, or `insufficient-evidence`; the CLI does not generate, rank, or silently revise hypotheses. See [the case schema](schemas/debug_case.schema.json) for the JSON contract.
+
+## Reproduce and verify a fix
+
+Run a simulation only through an explicit command. The command's stdout/stderr, exit status, optional JUnit/XML result, changed waveform, and source context are archived into a manifest. A successful command is only a confirmed passing verification when JUnit reports no failures or `--confirm-passing` is explicit.
+
+```bash
+python "$CLI" reproduce --run-command '<simulation command>' \
+  --waveform <expected-waveform-output> --results <results-xml> \
+  --out build/wave-debug/runs/<run-id>/manifest.json
+```
+
+Pass `--confirm-failure` when a manually selected waveform is known to be the failing run. `case init` requires this confirmation or a matching manifest with `confirmed-failure`; ordinary `probe`, `signals`, and `scopes` remain available for any explicit waveform. `probe --around-failure --provenance-file <manifest>` works only with a confirmed failure that has one explicit failure time.
+
+After a fix, verify the original case against a waveform from a confirmed-passing reproduction:
+
+```bash
+python "$CLI" case verify-fix --case <failing-case-or-revision> \
+  --waveform <verification-waveform> --verification-manifest <run-manifest> \
+  --outcome fixed --report build/wave-debug/fix-report.md
+```
+
+The report records before/after check evidence, command exit status, testcase, and JUnit result. A targeted test that fails before the change and passes after it is already a valid regression; add a new testcase only when existing coverage does not exercise the behavior.
 
 Map selected activity back to RTL:
 
@@ -126,6 +151,10 @@ On Debian/Ubuntu, `sudo apt install verilator` is a convenient starting point; u
 The bundled `pywellen` component is distributed under BSD-3-Clause; see `third_party/pywellen/LICENSE`.
 
 Authority JSON and SQLite metadata use the same `0.4` schema version. The JSON contract is published in `schemas/authority.schema.json`; consumers should reject unsupported versions instead of guessing field semantics. Authority files and cache metadata are written atomically, while cache identity includes the selected backend, sources, include paths, and definitions.
+
+## Versions
+
+Tool version `0.6.0` is separate from persisted contracts: waveform evidence and authority remain `0.4`, provenance is `1.0`, and debug cases are `1.0`. JSON command responses include `tool_version` and `contract_schema`; `doctor --json` publishes the complete registry.
 
 ## Development
 

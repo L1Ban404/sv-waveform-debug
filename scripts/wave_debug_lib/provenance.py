@@ -9,6 +9,7 @@ from typing import Any
 
 from .project import SourceManifest
 from .wave import WaveBackend
+from . import TOOL_VERSION
 
 
 PROVENANCE_SCHEMA_VERSION = "1.0"
@@ -29,11 +30,15 @@ def build_provenance(
     parameter_overrides: list[str] | None = None,
     failure_time: str | None = None,
     failure_label: str | None = None,
+    failure_relation: str = "unknown",
 ) -> dict[str, object]:
+    if failure_relation not in {"confirmed-failure", "confirmed-passing", "unknown"}:
+        raise ValueError(f"unsupported failure relation: {failure_relation}")
     source = wave.source_path or wave.path
     stat = source.stat()
     return {
         "schema_version": PROVENANCE_SCHEMA_VERSION,
+        "tool_version": TOOL_VERSION,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "waveform": {
             "path": str(source.resolve()),
@@ -58,7 +63,7 @@ def build_provenance(
             "defines": manifest.defines,
             "parameter_overrides": parameter_overrides or [],
         },
-        "failure": {"time": failure_time, "label": failure_label},
+        "failure": {"time": failure_time, "label": failure_label, "relation": failure_relation},
     }
 
 
@@ -68,6 +73,12 @@ def read_provenance(path: Path) -> dict[str, Any]:
         raise ValueError(f"unsupported provenance manifest: {path}")
     if not isinstance(payload.get("waveform"), dict):
         raise ValueError(f"provenance manifest has no waveform record: {path}")
+    failure = payload.setdefault("failure", {})
+    if not isinstance(failure, dict):
+        raise ValueError(f"provenance manifest has invalid failure record: {path}")
+    failure.setdefault("relation", "unknown")
+    if failure["relation"] not in {"confirmed-failure", "confirmed-passing", "unknown"}:
+        raise ValueError(f"provenance manifest has invalid failure relation: {path}")
     return payload
 
 
